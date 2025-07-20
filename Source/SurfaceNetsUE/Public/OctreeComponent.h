@@ -12,11 +12,8 @@ class UProceduralMeshComponent;
 /**
  * Octree node for spatial subdivision and LOD management
  */
-USTRUCT()
 struct SURFACENETSUE_API FOctreeNode
 {
-    GENERATED_BODY()
-
 public:
     FOctreeNode();
     
