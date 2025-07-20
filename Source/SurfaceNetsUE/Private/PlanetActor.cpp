@@ -145,11 +145,15 @@ void APlanetActor::ReturnMeshComponent(UProceduralMeshComponent* MeshComponent)
 UProceduralMeshComponent* APlanetActor::CreateMeshComponent()
 {
     FString CompName = FString::Printf(TEXT("PlanetMesh_%d"), MeshComponents.Num());
-    UProceduralMeshComponent* MeshComp = CreateDefaultSubobject<UProceduralMeshComponent>(*CompName);
+    UProceduralMeshComponent* MeshComp = NewObject<UProceduralMeshComponent>(this, *CompName);
     
     if (MeshComp)
     {
-        MeshComp->SetupAttachment(RootComponent);
+        // Register the component with the actor
+        MeshComp->RegisterComponent();
+        
+        // Attach to root component
+        MeshComp->AttachToComponent(RootComponent, FAttachmentTransformRules::KeepRelativeTransform);
         
         // Set material if available
         if (PlanetMaterial)
