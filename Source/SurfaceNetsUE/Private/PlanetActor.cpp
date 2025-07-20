@@ -59,14 +59,29 @@ void APlanetActor::InitializePlanet()
         return;
     }
     
-    // Set up noise generator
+    // Set up noise generator with actor's world position as planet center
+    FVector ActorPosition = GetActorLocation();
     NoiseGenerator->PlanetRadius = PlanetRadius;
+    NoiseGenerator->PlanetCenter = ActorPosition;
     
     // Set noise generator in octree
     OctreeComponent->SetNoiseGenerator(NoiseGenerator);
     
-    // Initialize octree
-    OctreeComponent->InitializeOctree(GetActorLocation());
+    // Scale octree and LOD distances based on planet radius
+    OctreeComponent->RootSize = PlanetRadius * 2.5f; // Scale octree size with planet radius
+    
+    // Scale LOD distances based on planet radius
+    TArray<float> ScaledLODDistances;
+    float RadiusScale = PlanetRadius / 1000.0f; // Base scaling (1000.0f is the default radius)
+    ScaledLODDistances.Add(50.0f * RadiusScale);   // Close detail
+    ScaledLODDistances.Add(150.0f * RadiusScale);  // Medium detail
+    ScaledLODDistances.Add(400.0f * RadiusScale);  // Lower detail
+    ScaledLODDistances.Add(1000.0f * RadiusScale); // Distant detail
+    ScaledLODDistances.Add(2500.0f * RadiusScale); // Very distant
+    OctreeComponent->LODDistances = ScaledLODDistances;
+    
+    // Initialize octree at actor's position
+    OctreeComponent->InitializeOctree(ActorPosition);
     
     // Pre-create some mesh components
     for (int32 i = 0; i < FMath::Min(MaxMeshComponents / 4, 25); i++)
@@ -75,7 +90,7 @@ void APlanetActor::InitializePlanet()
         AvailableMeshComponents.Add(MeshComp);
     }
     
-    UE_LOG(LogSurfaceNets, Log, TEXT("Planet initialized with radius %f"), PlanetRadius);
+    UE_LOG(LogSurfaceNets, Log, TEXT("Planet initialized at %s with radius %f, scaled LOD distances"), *ActorPosition.ToString(), PlanetRadius);
 }
 
 void APlanetActor::UpdatePlanetMeshes()

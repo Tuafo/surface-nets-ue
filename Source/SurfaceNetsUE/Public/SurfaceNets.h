@@ -54,6 +54,21 @@ private:
     /** Get vertex index for a cube, creating if necessary */
     int32 GetOrCreateVertex(int32 x, int32 y, int32 z, TMap<FIntVector, int32>& VertexMap);
     
+    /** Get vertex index from vertex grid */
+    int32 GetVertexIndex(const TArray<int32>& VertexGrid, int32 GridSize, int32 x, int32 y, int32 z);
+    
+    /** Connect two vertices with a triangle using a third neighboring vertex */
+    void ConnectToNeighbor(
+        const TArray<int32>& VertexGrid, 
+        int32 GridSize, 
+        int32 x1, int32 y1, int32 z1,
+        int32 x2, int32 y2, int32 z2,
+        TArray<int32>& OutTriangles
+    );
+    
+    /** Remove duplicate triangles from the triangle array */
+    void RemoveDuplicateTriangles(TArray<int32>& Triangles);
+    
     /** Cube face directions for mesh generation */
     static const FIntVector CubeFaces[6][4];
 };

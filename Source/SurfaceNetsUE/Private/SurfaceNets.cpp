@@ -32,7 +32,7 @@ void FSurfaceNets::GenerateMesh(
     
     TMap<FIntVector, int32> VertexMap;
     
-    // First pass: Generate vertices for cubes containing the surface
+    // Generate vertices for all cubes that contain the surface
     for (int32 z = 0; z < GridSize - 1; z++)
     {
         for (int32 y = 0; y < GridSize - 1; y++)
@@ -50,67 +50,65 @@ void FSurfaceNets::GenerateMesh(
         }
     }
     
-    // Second pass: Generate quads between neighboring vertices
-    for (int32 z = 0; z < GridSize - 2; z++)
+    // Generate triangles using a more robust approach for spherical surfaces
+    // We'll create triangles by connecting adjacent vertices in a way that creates a closed surface
+    for (auto& VertexPair : VertexMap)
     {
-        for (int32 y = 0; y < GridSize - 2; y++)
+        FIntVector Pos = VertexPair.Key;
+        int32 CurrentVertex = VertexPair.Value;
+        
+        // Try to form triangles with neighboring vertices
+        TArray<int32> Neighbors;
+        
+        // Check all 26 possible neighbors (3x3x3 - 1 for center)
+        for (int32 dz = -1; dz <= 1; dz++)
         {
-            for (int32 x = 0; x < GridSize - 2; x++)
+            for (int32 dy = -1; dy <= 1; dy++)
             {
-                // Try to create quads in each direction
-                
-                // Quad in XY plane (Z-aligned)
-                if (VertexMap.Contains(FIntVector(x, y, z)) &&
-                    VertexMap.Contains(FIntVector(x + 1, y, z)) &&
-                    VertexMap.Contains(FIntVector(x, y + 1, z)) &&
-                    VertexMap.Contains(FIntVector(x + 1, y + 1, z)))
+                for (int32 dx = -1; dx <= 1; dx++)
                 {
-                    int32 V0 = VertexMap[FIntVector(x, y, z)];
-                    int32 V1 = VertexMap[FIntVector(x + 1, y, z)];
-                    int32 V2 = VertexMap[FIntVector(x + 1, y + 1, z)];
-                    int32 V3 = VertexMap[FIntVector(x, y + 1, z)];
+                    if (dx == 0 && dy == 0 && dz == 0) continue;
                     
-                    // Create two triangles with consistent winding order
-                    OutTriangles.Add(V0); OutTriangles.Add(V1); OutTriangles.Add(V2);
-                    OutTriangles.Add(V0); OutTriangles.Add(V2); OutTriangles.Add(V3);
+                    FIntVector NeighborPos = Pos + FIntVector(dx, dy, dz);
+                    if (int32* NeighborIndex = VertexMap.Find(NeighborPos))
+                    {
+                        Neighbors.Add(*NeighborIndex);
+                    }
                 }
+            }
+        }
+        
+        // Create triangles from the current vertex to pairs of neighbors
+        // This creates a fan-like triangulation around each vertex
+        for (int32 i = 0; i < Neighbors.Num(); i++)
+        {
+            for (int32 j = i + 1; j < Neighbors.Num(); j++)
+            {
+                // Only create triangles if vertices form a reasonable triangle
+                FVector V0 = OutVertices[CurrentVertex];
+                FVector V1 = OutVertices[Neighbors[i]];
+                FVector V2 = OutVertices[Neighbors[j]];
                 
-                // Quad in XZ plane (Y-aligned)
-                if (VertexMap.Contains(FIntVector(x, y, z)) &&
-                    VertexMap.Contains(FIntVector(x + 1, y, z)) &&
-                    VertexMap.Contains(FIntVector(x, y, z + 1)) &&
-                    VertexMap.Contains(FIntVector(x + 1, y, z + 1)))
-                {
-                    int32 V0 = VertexMap[FIntVector(x, y, z)];
-                    int32 V1 = VertexMap[FIntVector(x + 1, y, z)];
-                    int32 V2 = VertexMap[FIntVector(x + 1, y, z + 1)];
-                    int32 V3 = VertexMap[FIntVector(x, y, z + 1)];
-                    
-                    // Create two triangles with consistent winding order  
-                    OutTriangles.Add(V0); OutTriangles.Add(V3); OutTriangles.Add(V2);
-                    OutTriangles.Add(V0); OutTriangles.Add(V2); OutTriangles.Add(V1);
-                }
+                // Check if triangle has reasonable area and isn't degenerate
+                FVector Edge1 = V1 - V0;
+                FVector Edge2 = V2 - V0;
+                float TriangleArea = FVector::CrossProduct(Edge1, Edge2).Size();
                 
-                // Quad in YZ plane (X-aligned)
-                if (VertexMap.Contains(FIntVector(x, y, z)) &&
-                    VertexMap.Contains(FIntVector(x, y + 1, z)) &&
-                    VertexMap.Contains(FIntVector(x, y, z + 1)) &&
-                    VertexMap.Contains(FIntVector(x, y + 1, z + 1)))
+                if (TriangleArea > 0.01f * VoxelSize * VoxelSize) // Minimum area threshold
                 {
-                    int32 V0 = VertexMap[FIntVector(x, y, z)];
-                    int32 V1 = VertexMap[FIntVector(x, y + 1, z)];
-                    int32 V2 = VertexMap[FIntVector(x, y + 1, z + 1)];
-                    int32 V3 = VertexMap[FIntVector(x, y, z + 1)];
-                    
-                    // Create two triangles with consistent winding order
-                    OutTriangles.Add(V0); OutTriangles.Add(V1); OutTriangles.Add(V2);
-                    OutTriangles.Add(V0); OutTriangles.Add(V2); OutTriangles.Add(V3);
+                    // Add triangle with consistent winding
+                    OutTriangles.Add(CurrentVertex);
+                    OutTriangles.Add(Neighbors[i]);
+                    OutTriangles.Add(Neighbors[j]);
                 }
             }
         }
     }
     
-    // Calculate vertex normals using face normal averaging
+    // Remove duplicate and degenerate triangles
+    RemoveDuplicateTriangles(OutTriangles);
+    
+    // Calculate vertex normals
     OutNormals.SetNum(OutVertices.Num());
     for (int32 i = 0; i < OutNormals.Num(); i++)
     {
@@ -136,14 +134,12 @@ void FSurfaceNets::GenerateMesh(
         }
     }
     
-    // Normalize accumulated normals
+    // Normalize accumulated normals with gradient fallback
     for (int32 i = 0; i < OutNormals.Num(); i++)
     {
-        OutNormals[i] = OutNormals[i].GetSafeNormal();
-        
-        // Fallback to gradient-based normal if accumulated normal is zero
         if (OutNormals[i].IsNearlyZero())
         {
+            // Use gradient-based normal for isolated vertices
             FVector WorldPos = OutVertices[i];
             FVector GridPos = (WorldPos - Origin) / VoxelSize;
             
@@ -153,11 +149,16 @@ void FSurfaceNets::GenerateMesh(
                 FMath::RoundToInt(GridPos.Z));
             
             OutNormals[i] = GradientNormal.GetSafeNormal();
-            
-            if (OutNormals[i].IsNearlyZero())
-            {
-                OutNormals[i] = FVector::UpVector;
-            }
+        }
+        else
+        {
+            OutNormals[i] = OutNormals[i].GetSafeNormal();
+        }
+        
+        // Final fallback
+        if (OutNormals[i].IsNearlyZero())
+        {
+            OutNormals[i] = FVector::UpVector;
         }
     }
 }
@@ -244,4 +245,86 @@ int32 FSurfaceNets::GetOrCreateVertex(int32 x, int32 y, int32 z, TMap<FIntVector
     int32 NewIndex = VertexMap.Num();
     VertexMap.Add(Key, NewIndex);
     return NewIndex;
+}
+
+int32 FSurfaceNets::GetVertexIndex(const TArray<int32>& VertexGrid, int32 GridSize, int32 x, int32 y, int32 z)
+{
+    if (x < 0 || x >= GridSize || y < 0 || y >= GridSize || z < 0 || z >= GridSize)
+    {
+        return -1;
+    }
+    
+    int32 GridIndex = x + y * GridSize + z * GridSize * GridSize;
+    return VertexGrid[GridIndex];
+}
+
+void FSurfaceNets::ConnectToNeighbor(
+    const TArray<int32>& VertexGrid, 
+    int32 GridSize, 
+    int32 x1, int32 y1, int32 z1,
+    int32 x2, int32 y2, int32 z2,
+    TArray<int32>& OutTriangles)
+{
+    int32 V1 = GetVertexIndex(VertexGrid, GridSize, x1, y1, z1);
+    int32 V2 = GetVertexIndex(VertexGrid, GridSize, x2, y2, z2);
+    
+    if (V1 == -1 || V2 == -1) return;
+    
+    // Find a third vertex to form a triangle
+    // Try different combinations of neighbors
+    TArray<FIntVector> PotentialThirdVertices = {
+        FIntVector(x1+1, y1, z1), FIntVector(x1-1, y1, z1),
+        FIntVector(x1, y1+1, z1), FIntVector(x1, y1-1, z1),
+        FIntVector(x1, y1, z1+1), FIntVector(x1, y1, z1-1),
+        FIntVector(x2+1, y2, z2), FIntVector(x2-1, y2, z2),
+        FIntVector(x2, y2+1, z2), FIntVector(x2, y2-1, z2),
+        FIntVector(x2, y2, z2+1), FIntVector(x2, y2, z2-1)
+    };
+    
+    for (const FIntVector& ThirdPos : PotentialThirdVertices)
+    {
+        int32 V3 = GetVertexIndex(VertexGrid, GridSize, ThirdPos.X, ThirdPos.Y, ThirdPos.Z);
+        if (V3 != -1 && V3 != V1 && V3 != V2)
+        {
+            // Create triangle with consistent winding order
+            OutTriangles.Add(V1);
+            OutTriangles.Add(V2);
+            OutTriangles.Add(V3);
+            break; // Only create one triangle per connection
+        }
+    }
+}
+
+void FSurfaceNets::RemoveDuplicateTriangles(TArray<int32>& Triangles)
+{
+    TSet<FIntVector> UniqueTriangles;
+    TArray<int32> FilteredTriangles;
+    
+    for (int32 i = 0; i < Triangles.Num(); i += 3)
+    {
+        if (i + 2 >= Triangles.Num()) break;
+        
+        int32 V0 = Triangles[i];
+        int32 V1 = Triangles[i + 1];
+        int32 V2 = Triangles[i + 2];
+        
+        // Skip degenerate triangles
+        if (V0 == V1 || V1 == V2 || V0 == V2) continue;
+        
+        // Sort vertices to create canonical representation
+        TArray<int32> SortedVerts = {V0, V1, V2};
+        SortedVerts.Sort();
+        
+        FIntVector TriangleKey(SortedVerts[0], SortedVerts[1], SortedVerts[2]);
+        
+        if (!UniqueTriangles.Contains(TriangleKey))
+        {
+            UniqueTriangles.Add(TriangleKey);
+            FilteredTriangles.Add(V0);
+            FilteredTriangles.Add(V1);
+            FilteredTriangles.Add(V2);
+        }
+    }
+    
+    Triangles = FilteredTriangles;
 }

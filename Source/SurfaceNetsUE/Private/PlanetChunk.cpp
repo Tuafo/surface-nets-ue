@@ -85,14 +85,16 @@ void FPlanetChunk::ClearMesh()
 
 int32 FPlanetChunk::GetVoxelResolution() const
 {
-    // Higher LOD levels have lower resolution
+    // Adjust voxel resolution based on LOD level for better planet representation
+    // Higher LOD levels have lower resolution but still enough detail for spheres
     switch (LODLevel)
     {
-        case 0: return 64;  // Highest detail
-        case 1: return 32;
-        case 2: return 16;
-        case 3: return 8;
-        default: return 4;  // Lowest detail
+        case 0: return 32;  // Highest detail - reduced from 64 for better performance
+        case 1: return 24;  // Good detail
+        case 2: return 16;  // Medium detail
+        case 3: return 12;  // Lower detail
+        case 4: return 8;   // Lowest detail
+        default: return 6;  // Fallback
     }
 }
 

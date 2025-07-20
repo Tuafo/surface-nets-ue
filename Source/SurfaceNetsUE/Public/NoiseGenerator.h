@@ -19,6 +19,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet")
     float PlanetRadius = 1000.0f;
     
+    /** Planet center position in world coordinates */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet")
+    FVector PlanetCenter = FVector::ZeroVector;
+    
     /** Noise scale for terrain features */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Noise")
     float NoiseScale = 0.01f;

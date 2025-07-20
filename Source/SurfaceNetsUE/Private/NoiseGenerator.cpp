@@ -14,8 +14,8 @@ UNoiseGenerator::UNoiseGenerator()
 
 float UNoiseGenerator::SampleDensity(const FVector& WorldPosition) const
 {
-    // Calculate distance from planet center
-    float DistanceFromCenter = WorldPosition.Size();
+    // Calculate distance from planet center (considering planet center position)
+    float DistanceFromCenter = (WorldPosition - PlanetCenter).Size();
     
     // Base sphere
     float SphereDensity = DistanceFromCenter - PlanetRadius;
