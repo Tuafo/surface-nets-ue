@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "Math/ConvexVolume.h"
 #include "PlanetChunk.h"
 #include "OctreeComponent.generated.h"
 
@@ -18,6 +19,14 @@ struct SURFACENETSUE_API FOctreeNode
 
 public:
     FOctreeNode();
+    
+    // Delete copy constructor and assignment operator due to TUniquePtr member
+    FOctreeNode(const FOctreeNode&) = delete;
+    FOctreeNode& operator=(const FOctreeNode&) = delete;
+    
+    // Allow move constructor and assignment
+    FOctreeNode(FOctreeNode&&) = default;
+    FOctreeNode& operator=(FOctreeNode&&) = default;
     
     /** Center position of this node */
     FVector Center;
@@ -53,7 +62,7 @@ public:
     void UpdateLOD(const FVector& CameraPosition, const TArray<float>& LODDistances);
     
     /** Check if this node is in camera frustum */
-    bool IsInFrustum(const class FConvexVolume& Frustum) const;
+    bool IsInFrustum(const FConvexVolume& Frustum) const;
 };
 
 /**
