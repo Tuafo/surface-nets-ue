@@ -120,6 +120,7 @@ UOctreeComponent::UOctreeComponent()
     bEnableFrustumCulling = true;
     UpdateTimer = 0.0f;
     NoiseGenerator = nullptr;
+    LastPlayerPosition = FVector::ZeroVector;
     
     // Default LOD distances
     LODDistances = {100.0f, 300.0f, 800.0f, 2000.0f, 5000.0f};
@@ -143,23 +144,14 @@ void UOctreeComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActo
     {
         UpdateTimer = 0.0f;
         
-        // Get camera position
-        if (UWorld* World = GetWorld())
+        // Get player position using simplified approach
+        FVector PlayerPosition = GetPlayerLocation();
+        
+        // Only update if player moved significantly
+        if (FVector::Dist(PlayerPosition, LastPlayerPosition) > 10.0f)
         {
-            if (APlayerController* PC = World->GetFirstPlayerController())
-            {
-                if (APawn* Pawn = PC->GetPawn())
-                {
-                    FVector CameraPosition = Pawn->GetActorLocation();
-                    
-                    // Only update if camera moved significantly
-                    if (FVector::Dist(CameraPosition, LastCameraPosition) > 10.0f)
-                    {
-                        UpdateLOD(CameraPosition);
-                        LastCameraPosition = CameraPosition;
-                    }
-                }
-            }
+            UpdateLOD(PlayerPosition);
+            LastPlayerPosition = PlayerPosition;
         }
     }
 }
@@ -196,6 +188,37 @@ void UOctreeComponent::GetVisibleChunks(TArray<FPlanetChunk*>& OutChunks)
     }
     
     CollectVisibleChunks(RootNode, OutChunks);
+}
+
+int32 UOctreeComponent::GetVisibleChunkCount() const
+{
+    TArray<FPlanetChunk*> VisibleChunks;
+    if (!RootNode.IsValid())
+    {
+        return 0;
+    }
+    
+    // We need a mutable version for the const function
+    const_cast<UOctreeComponent*>(this)->CollectVisibleChunks(RootNode, VisibleChunks);
+    return VisibleChunks.Num();
+}
+
+FVector UOctreeComponent::GetPlayerLocation() const
+{
+    // Simplified player location getter - much more reliable than complex camera calculations
+    if (UWorld* World = GetWorld())
+    {
+        if (APlayerController* PC = World->GetFirstPlayerController())
+        {
+            if (APawn* Pawn = PC->GetPawn())
+            {
+                return Pawn->GetActorLocation();
+            }
+        }
+    }
+    
+    // Fallback to world origin
+    return FVector::ZeroVector;
 }
 
 void UOctreeComponent::SetNoiseGenerator(UNoiseGenerator* InNoiseGenerator)
@@ -273,18 +296,7 @@ void UOctreeComponent::GenerateChunkMesh(FPlanetChunk* Chunk)
 
 bool UOctreeComponent::GetCameraFrustum(FConvexVolume& OutFrustum) const
 {
-    if (UWorld* World = GetWorld())
-    {
-        if (APlayerController* PC = World->GetFirstPlayerController())
-        {
-            FMatrix ViewMatrix, ProjectionMatrix, ViewProjectionMatrix;
-            if (PC->GetLocalPlayer() && PC->GetLocalPlayer()->ViewportClient)
-            {
-                // This is a simplified version - in a real implementation you'd get the actual view/projection matrices
-                return false; // For now, return false to disable frustum culling
-            }
-        }
-    }
-    
+    // Simplified approach: disable frustum culling for now and rely on distance-based LOD
+    // Using player location is simpler and more efficient for planet generation
     return false;
 }

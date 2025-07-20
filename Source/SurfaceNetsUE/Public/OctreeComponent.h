@@ -102,8 +102,15 @@ public:
     void UpdateLOD(const FVector& CameraPosition);
     
     /** Get all visible chunks for rendering */
-    UFUNCTION(BlueprintCallable, Category = "Octree")
     void GetVisibleChunks(TArray<FPlanetChunk*>& OutChunks);
+    
+    /** Get number of visible chunks (Blueprint accessible) */
+    UFUNCTION(BlueprintCallable, Category = "Octree")
+    int32 GetVisibleChunkCount() const;
+    
+    /** Get player location for LOD calculations */
+    UFUNCTION(BlueprintCallable, Category = "Octree")
+    FVector GetPlayerLocation() const;
     
     /** Set noise generator */
     UFUNCTION(BlueprintCallable, Category = "Octree")
@@ -120,8 +127,8 @@ private:
     /** Timer for LOD updates */
     float UpdateTimer;
     
-    /** Last camera position */
-    FVector LastCameraPosition;
+    /** Last player position */
+    FVector LastPlayerPosition;
     
     /** Recursively update LOD for node and children */
     void UpdateNodeLOD(TSharedPtr<FOctreeNode> Node, const FVector& CameraPosition);
