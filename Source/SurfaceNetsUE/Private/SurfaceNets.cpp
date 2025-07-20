@@ -31,9 +31,8 @@ void FSurfaceNets::GenerateMesh(
     OutNormals.Empty();
     
     TMap<FIntVector, int32> VertexMap;
-    TArray<FVector> TempVertices;
     
-    // Generate vertices for each cube that contains the surface
+    // First pass: Generate vertices for cubes containing the surface
     for (int32 z = 0; z < GridSize - 1; z++)
     {
         for (int32 y = 0; y < GridSize - 1; y++)
@@ -43,95 +42,123 @@ void FSurfaceNets::GenerateMesh(
                 if (ContainsSurface(DensityField, GridSize, x, y, z))
                 {
                     FVector VertexPos = CalculateVertexPosition(DensityField, GridSize, x, y, z, VoxelSize, Origin);
-                    int32 VertexIndex = TempVertices.Num();
-                    TempVertices.Add(VertexPos);
+                    int32 VertexIndex = OutVertices.Num();
+                    OutVertices.Add(VertexPos);
                     VertexMap.Add(FIntVector(x, y, z), VertexIndex);
                 }
             }
         }
     }
     
-    // Generate faces between adjacent cubes
-    for (int32 z = 0; z < GridSize - 1; z++)
+    // Second pass: Generate quads between neighboring vertices
+    for (int32 z = 0; z < GridSize - 2; z++)
     {
-        for (int32 y = 0; y < GridSize - 1; y++)
+        for (int32 y = 0; y < GridSize - 2; y++)
         {
-            for (int32 x = 0; x < GridSize - 1; x++)
+            for (int32 x = 0; x < GridSize - 2; x++)
             {
-                if (VertexMap.Contains(FIntVector(x, y, z)))
+                // Try to create quads in each direction
+                
+                // Quad in XY plane (Z-aligned)
+                if (VertexMap.Contains(FIntVector(x, y, z)) &&
+                    VertexMap.Contains(FIntVector(x + 1, y, z)) &&
+                    VertexMap.Contains(FIntVector(x, y + 1, z)) &&
+                    VertexMap.Contains(FIntVector(x + 1, y + 1, z)))
                 {
-                    int32 CurrentVertex = VertexMap[FIntVector(x, y, z)];
+                    int32 V0 = VertexMap[FIntVector(x, y, z)];
+                    int32 V1 = VertexMap[FIntVector(x + 1, y, z)];
+                    int32 V2 = VertexMap[FIntVector(x + 1, y + 1, z)];
+                    int32 V3 = VertexMap[FIntVector(x, y + 1, z)];
                     
-                    // Check adjacent cubes and create quads
-                    // +X direction
-                    if (x < GridSize - 2 && VertexMap.Contains(FIntVector(x + 1, y, z)))
-                    {
-                        // Check for vertical neighbors to form quad
-                        if (y < GridSize - 2 && 
-                            VertexMap.Contains(FIntVector(x, y + 1, z)) &&
-                            VertexMap.Contains(FIntVector(x + 1, y + 1, z)))
-                        {
-                            int32 V0 = CurrentVertex;
-                            int32 V1 = VertexMap[FIntVector(x + 1, y, z)];
-                            int32 V2 = VertexMap[FIntVector(x + 1, y + 1, z)];
-                            int32 V3 = VertexMap[FIntVector(x, y + 1, z)];
-                            
-                            // Create two triangles for the quad
-                            OutTriangles.Add(V0);
-                            OutTriangles.Add(V1);
-                            OutTriangles.Add(V2);
-                            
-                            OutTriangles.Add(V0);
-                            OutTriangles.Add(V2);
-                            OutTriangles.Add(V3);
-                        }
-                    }
+                    // Create two triangles with consistent winding order
+                    OutTriangles.Add(V0); OutTriangles.Add(V1); OutTriangles.Add(V2);
+                    OutTriangles.Add(V0); OutTriangles.Add(V2); OutTriangles.Add(V3);
+                }
+                
+                // Quad in XZ plane (Y-aligned)
+                if (VertexMap.Contains(FIntVector(x, y, z)) &&
+                    VertexMap.Contains(FIntVector(x + 1, y, z)) &&
+                    VertexMap.Contains(FIntVector(x, y, z + 1)) &&
+                    VertexMap.Contains(FIntVector(x + 1, y, z + 1)))
+                {
+                    int32 V0 = VertexMap[FIntVector(x, y, z)];
+                    int32 V1 = VertexMap[FIntVector(x + 1, y, z)];
+                    int32 V2 = VertexMap[FIntVector(x + 1, y, z + 1)];
+                    int32 V3 = VertexMap[FIntVector(x, y, z + 1)];
                     
-                    // +Z direction
-                    if (z < GridSize - 2 && VertexMap.Contains(FIntVector(x, y, z + 1)))
-                    {
-                        // Check for horizontal neighbors to form quad
-                        if (x < GridSize - 2 && 
-                            VertexMap.Contains(FIntVector(x + 1, y, z)) &&
-                            VertexMap.Contains(FIntVector(x + 1, y, z + 1)))
-                        {
-                            int32 V0 = CurrentVertex;
-                            int32 V1 = VertexMap[FIntVector(x + 1, y, z)];
-                            int32 V2 = VertexMap[FIntVector(x + 1, y, z + 1)];
-                            int32 V3 = VertexMap[FIntVector(x, y, z + 1)];
-                            
-                            // Create two triangles for the quad
-                            OutTriangles.Add(V0);
-                            OutTriangles.Add(V3);
-                            OutTriangles.Add(V2);
-                            
-                            OutTriangles.Add(V0);
-                            OutTriangles.Add(V2);
-                            OutTriangles.Add(V1);
-                        }
-                    }
+                    // Create two triangles with consistent winding order  
+                    OutTriangles.Add(V0); OutTriangles.Add(V3); OutTriangles.Add(V2);
+                    OutTriangles.Add(V0); OutTriangles.Add(V2); OutTriangles.Add(V1);
+                }
+                
+                // Quad in YZ plane (X-aligned)
+                if (VertexMap.Contains(FIntVector(x, y, z)) &&
+                    VertexMap.Contains(FIntVector(x, y + 1, z)) &&
+                    VertexMap.Contains(FIntVector(x, y, z + 1)) &&
+                    VertexMap.Contains(FIntVector(x, y + 1, z + 1)))
+                {
+                    int32 V0 = VertexMap[FIntVector(x, y, z)];
+                    int32 V1 = VertexMap[FIntVector(x, y + 1, z)];
+                    int32 V2 = VertexMap[FIntVector(x, y + 1, z + 1)];
+                    int32 V3 = VertexMap[FIntVector(x, y, z + 1)];
+                    
+                    // Create two triangles with consistent winding order
+                    OutTriangles.Add(V0); OutTriangles.Add(V1); OutTriangles.Add(V2);
+                    OutTriangles.Add(V0); OutTriangles.Add(V2); OutTriangles.Add(V3);
                 }
             }
         }
     }
     
-    // Copy vertices to output
-    OutVertices = TempVertices;
-    
-    // Calculate normals
+    // Calculate vertex normals using face normal averaging
     OutNormals.SetNum(OutVertices.Num());
-    for (int32 i = 0; i < OutVertices.Num(); i++)
+    for (int32 i = 0; i < OutNormals.Num(); i++)
     {
-        // Find the corresponding grid position for normal calculation
-        FVector WorldPos = OutVertices[i];
-        FVector GridPos = (WorldPos - Origin) / VoxelSize;
+        OutNormals[i] = FVector::ZeroVector;
+    }
+    
+    // Accumulate face normals to vertex normals
+    for (int32 i = 0; i < OutTriangles.Num(); i += 3)
+    {
+        int32 V0 = OutTriangles[i];
+        int32 V1 = OutTriangles[i + 1];
+        int32 V2 = OutTriangles[i + 2];
         
-        FVector Normal = CalculateGradient(DensityField, GridSize, 
-            FMath::RoundToInt(GridPos.X), 
-            FMath::RoundToInt(GridPos.Y), 
-            FMath::RoundToInt(GridPos.Z));
+        if (V0 < OutVertices.Num() && V1 < OutVertices.Num() && V2 < OutVertices.Num())
+        {
+            FVector Edge1 = OutVertices[V1] - OutVertices[V0];
+            FVector Edge2 = OutVertices[V2] - OutVertices[V0];
+            FVector FaceNormal = FVector::CrossProduct(Edge1, Edge2).GetSafeNormal();
+            
+            OutNormals[V0] += FaceNormal;
+            OutNormals[V1] += FaceNormal;
+            OutNormals[V2] += FaceNormal;
+        }
+    }
+    
+    // Normalize accumulated normals
+    for (int32 i = 0; i < OutNormals.Num(); i++)
+    {
+        OutNormals[i] = OutNormals[i].GetSafeNormal();
         
-        OutNormals[i] = Normal.GetSafeNormal();
+        // Fallback to gradient-based normal if accumulated normal is zero
+        if (OutNormals[i].IsNearlyZero())
+        {
+            FVector WorldPos = OutVertices[i];
+            FVector GridPos = (WorldPos - Origin) / VoxelSize;
+            
+            FVector GradientNormal = CalculateGradient(DensityField, GridSize, 
+                FMath::RoundToInt(GridPos.X), 
+                FMath::RoundToInt(GridPos.Y), 
+                FMath::RoundToInt(GridPos.Z));
+            
+            OutNormals[i] = GradientNormal.GetSafeNormal();
+            
+            if (OutNormals[i].IsNearlyZero())
+            {
+                OutNormals[i] = FVector::UpVector;
+            }
+        }
     }
 }
 
