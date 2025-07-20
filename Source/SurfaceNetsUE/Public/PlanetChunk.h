@@ -2,26 +2,34 @@
 
 #include "CoreMinimal.h"
 #include "ProceduralMeshComponent.h"
+#include "PlanetChunk.generated.h"
 
 /**
  * Represents a single chunk of planet terrain
  */
+USTRUCT(BlueprintType)
 struct SURFACENETSUE_API FPlanetChunk
 {
+    GENERATED_BODY()
+
 public:
     FPlanetChunk();
     FPlanetChunk(const FVector& InPosition, int32 InLODLevel, float InSize);
     
     /** Position of this chunk in world space */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Chunk")
     FVector Position;
     
     /** LOD level (0 = highest detail) */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Chunk")
     int32 LODLevel;
     
     /** Size of this chunk */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Chunk")
     float Size;
     
     /** Voxel resolution for this chunk */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Chunk")
     int32 VoxelResolution;
     
     /** Generated mesh data */

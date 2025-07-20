@@ -101,7 +101,7 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Octree")
     void UpdateLOD(const FVector& CameraPosition);
     
-    /** Get all visible chunks for rendering */
+    /** Get all visible chunks for rendering (C++ only) */
     void GetVisibleChunks(TArray<FPlanetChunk*>& OutChunks);
     
     /** Get number of visible chunks (Blueprint accessible) */
