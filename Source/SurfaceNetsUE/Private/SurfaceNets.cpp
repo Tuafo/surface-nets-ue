@@ -50,56 +50,68 @@ void FSurfaceNets::GenerateMesh(
         }
     }
     
-    // Generate triangles using a more robust approach for spherical surfaces
-    // We'll create triangles by connecting adjacent vertices in a way that creates a closed surface
-    for (auto& VertexPair : VertexMap)
+    // Generate triangles using a simpler, more reliable approach
+    // Create triangles by connecting vertices in a pattern that forms a closed surface
+    for (int32 z = 0; z < GridSize - 2; z++)
     {
-        FIntVector Pos = VertexPair.Key;
-        int32 CurrentVertex = VertexPair.Value;
-        
-        // Try to form triangles with neighboring vertices
-        TArray<int32> Neighbors;
-        
-        // Check all 26 possible neighbors (3x3x3 - 1 for center)
-        for (int32 dz = -1; dz <= 1; dz++)
+        for (int32 y = 0; y < GridSize - 2; y++)
         {
-            for (int32 dy = -1; dy <= 1; dy++)
+            for (int32 x = 0; x < GridSize - 2; x++)
             {
-                for (int32 dx = -1; dx <= 1; dx++)
+                // Get the 8 vertices of the 2x2x2 cube of potential vertices
+                TArray<int32> CubeVertices;
+                TArray<FIntVector> CubePositions = {
+                    FIntVector(x, y, z),         // 0: (0,0,0)
+                    FIntVector(x+1, y, z),       // 1: (1,0,0)
+                    FIntVector(x+1, y+1, z),     // 2: (1,1,0)
+                    FIntVector(x, y+1, z),       // 3: (0,1,0)
+                    FIntVector(x, y, z+1),       // 4: (0,0,1)
+                    FIntVector(x+1, y, z+1),     // 5: (1,0,1)
+                    FIntVector(x+1, y+1, z+1),   // 6: (1,1,1)
+                    FIntVector(x, y+1, z+1)      // 7: (0,1,1)
+                };
+                
+                // Find which positions have vertices
+                for (const FIntVector& Pos : CubePositions)
                 {
-                    if (dx == 0 && dy == 0 && dz == 0) continue;
-                    
-                    FIntVector NeighborPos = Pos + FIntVector(dx, dy, dz);
-                    if (int32* NeighborIndex = VertexMap.Find(NeighborPos))
+                    if (VertexMap.Contains(Pos))
                     {
-                        Neighbors.Add(*NeighborIndex);
+                        CubeVertices.Add(VertexMap[Pos]);
+                    }
+                    else
+                    {
+                        CubeVertices.Add(-1);
                     }
                 }
-            }
-        }
-        
-        // Create triangles from the current vertex to pairs of neighbors
-        // This creates a fan-like triangulation around each vertex
-        for (int32 i = 0; i < Neighbors.Num(); i++)
-        {
-            for (int32 j = i + 1; j < Neighbors.Num(); j++)
-            {
-                // Only create triangles if vertices form a reasonable triangle
-                FVector V0 = OutVertices[CurrentVertex];
-                FVector V1 = OutVertices[Neighbors[i]];
-                FVector V2 = OutVertices[Neighbors[j]];
                 
-                // Check if triangle has reasonable area and isn't degenerate
-                FVector Edge1 = V1 - V0;
-                FVector Edge2 = V2 - V0;
-                float TriangleArea = FVector::CrossProduct(Edge1, Edge2).Size();
+                // Create triangles using a predefined pattern for cube connectivity
+                // This creates the classic cube triangulation pattern
+                TArray<TArray<int32>> TrianglePatterns = {
+                    {0, 1, 2}, {0, 2, 3}, // Bottom face
+                    {4, 7, 6}, {4, 6, 5}, // Top face
+                    {0, 4, 5}, {0, 5, 1}, // Front face
+                    {2, 6, 7}, {2, 7, 3}, // Back face
+                    {0, 3, 7}, {0, 7, 4}, // Left face
+                    {1, 5, 6}, {1, 6, 2}  // Right face
+                };
                 
-                if (TriangleArea > 0.01f * VoxelSize * VoxelSize) // Minimum area threshold
+                for (const TArray<int32>& Pattern : TrianglePatterns)
                 {
-                    // Add triangle with consistent winding
-                    OutTriangles.Add(CurrentVertex);
-                    OutTriangles.Add(Neighbors[i]);
-                    OutTriangles.Add(Neighbors[j]);
+                    // Check if all three vertices exist
+                    if (Pattern.Num() == 3 && 
+                        CubeVertices[Pattern[0]] != -1 && 
+                        CubeVertices[Pattern[1]] != -1 && 
+                        CubeVertices[Pattern[2]] != -1)
+                    {
+                        int32 V0 = CubeVertices[Pattern[0]];
+                        int32 V1 = CubeVertices[Pattern[1]];
+                        int32 V2 = CubeVertices[Pattern[2]];
+                        
+                        // Add triangle with consistent winding
+                        OutTriangles.Add(V0);
+                        OutTriangles.Add(V1);
+                        OutTriangles.Add(V2);
+                    }
                 }
             }
         }
@@ -327,4 +339,113 @@ void FSurfaceNets::RemoveDuplicateTriangles(TArray<int32>& Triangles)
     }
     
     Triangles = FilteredTriangles;
+}
+
+void FSurfaceNets::CreateQuadBetweenCubes(
+    const FIntVector& Cube1,
+    const FIntVector& Cube2,
+    const TMap<FIntVector, int32>& VertexMap,
+    TArray<int32>& OutTriangles)
+{
+    // Get the vertices for the two cubes
+    const int32* V1 = VertexMap.Find(Cube1);
+    const int32* V2 = VertexMap.Find(Cube2);
+    
+    if (!V1 || !V2) return;
+    
+    // Determine which face they share and find the other two vertices for the quad
+    FIntVector Diff = Cube2 - Cube1;
+    
+    // Find two more vertices that complete the quad
+    TArray<int32> QuadVertices;
+    QuadVertices.Add(*V1);
+    QuadVertices.Add(*V2);
+    
+    if (Diff.X == 1 && Diff.Y == 0 && Diff.Z == 0) // +X face
+    {
+        // Look for vertices that share the X face
+        FIntVector V3Pos = Cube1 + FIntVector(0, 1, 0);
+        FIntVector V4Pos = Cube1 + FIntVector(0, 0, 1);
+        
+        const int32* V3 = VertexMap.Find(V3Pos);
+        const int32* V4 = VertexMap.Find(V4Pos);
+        
+        if (V3 && V4)
+        {
+            QuadVertices.Add(*V3);
+            QuadVertices.Add(*V4);
+        }
+    }
+    else if (Diff.Y == 1 && Diff.X == 0 && Diff.Z == 0) // +Y face
+    {
+        // Look for vertices that share the Y face
+        FIntVector V3Pos = Cube1 + FIntVector(1, 0, 0);
+        FIntVector V4Pos = Cube1 + FIntVector(0, 0, 1);
+        
+        const int32* V3 = VertexMap.Find(V3Pos);
+        const int32* V4 = VertexMap.Find(V4Pos);
+        
+        if (V3 && V4)
+        {
+            QuadVertices.Add(*V3);
+            QuadVertices.Add(*V4);
+        }
+    }
+    else if (Diff.Z == 1 && Diff.X == 0 && Diff.Y == 0) // +Z face
+    {
+        // Look for vertices that share the Z face
+        FIntVector V3Pos = Cube1 + FIntVector(1, 0, 0);
+        FIntVector V4Pos = Cube1 + FIntVector(0, 1, 0);
+        
+        const int32* V3 = VertexMap.Find(V3Pos);
+        const int32* V4 = VertexMap.Find(V4Pos);
+        
+        if (V3 && V4)
+        {
+            QuadVertices.Add(*V3);
+            QuadVertices.Add(*V4);
+        }
+    }
+    
+    // If we have exactly 4 vertices, create two triangles with consistent winding
+    if (QuadVertices.Num() == 4)
+    {
+        // Triangle 1: V0, V1, V2
+        OutTriangles.Add(QuadVertices[0]);
+        OutTriangles.Add(QuadVertices[1]);
+        OutTriangles.Add(QuadVertices[2]);
+        
+        // Triangle 2: V0, V2, V3
+        OutTriangles.Add(QuadVertices[0]);
+        OutTriangles.Add(QuadVertices[2]);
+        OutTriangles.Add(QuadVertices[3]);
+    }
+    else if (QuadVertices.Num() == 2)
+    {
+        // If we only have 2 vertices, try to find any third vertex to create a triangle
+        // This handles edge cases where the quad approach doesn't work
+        
+        // Look for nearby vertices to complete at least one triangle
+        TArray<FIntVector> SearchPositions = {
+            Cube1 + FIntVector(1, 0, 0), Cube1 + FIntVector(-1, 0, 0),
+            Cube1 + FIntVector(0, 1, 0), Cube1 + FIntVector(0, -1, 0),
+            Cube1 + FIntVector(0, 0, 1), Cube1 + FIntVector(0, 0, -1),
+            Cube2 + FIntVector(1, 0, 0), Cube2 + FIntVector(-1, 0, 0),
+            Cube2 + FIntVector(0, 1, 0), Cube2 + FIntVector(0, -1, 0),
+            Cube2 + FIntVector(0, 0, 1), Cube2 + FIntVector(0, 0, -1)
+        };
+        
+        for (const FIntVector& SearchPos : SearchPositions)
+        {
+            const int32* V3 = VertexMap.Find(SearchPos);
+            if (V3 && *V3 != *V1 && *V3 != *V2)
+            {
+                // Create triangle with consistent winding
+                OutTriangles.Add(*V1);
+                OutTriangles.Add(*V2);
+                OutTriangles.Add(*V3);
+                break; // Only create one triangle per pair
+            }
+        }
+    }
 }

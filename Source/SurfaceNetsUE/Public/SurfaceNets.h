@@ -69,6 +69,14 @@ private:
     /** Remove duplicate triangles from the triangle array */
     void RemoveDuplicateTriangles(TArray<int32>& Triangles);
     
+    /** Create a quad between two adjacent surface-crossing cubes */
+    void CreateQuadBetweenCubes(
+        const FIntVector& Cube1,
+        const FIntVector& Cube2,
+        const TMap<FIntVector, int32>& VertexMap,
+        TArray<int32>& OutTriangles
+    );
+    
     /** Cube face directions for mesh generation */
     static const FIntVector CubeFaces[6][4];
 };
