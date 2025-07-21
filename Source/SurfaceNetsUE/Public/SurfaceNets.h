@@ -77,6 +77,16 @@ private:
         TArray<int32>& OutTriangles
     );
     
+    /** Create triangles for the shared face between two adjacent cubes */
+    void CreateTrianglesForSharedFace(
+        const FIntVector& Cube1,
+        const FIntVector& Cube2,
+        int32 Vertex1,
+        int32 Vertex2,
+        const TMap<FIntVector, int32>& VertexMap,
+        TArray<int32>& OutTriangles
+    );
+    
     /** Cube face directions for mesh generation */
     static const FIntVector CubeFaces[6][4];
 };
