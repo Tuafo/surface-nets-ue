@@ -370,6 +370,20 @@ void FSurfaceNets::CreateTrianglesForSharedFace(
 }
 
 void FSurfaceNets::CreateQuadBetweenCubes(
+    const FIntVector& Cube1,
+    const FIntVector& Cube2,
+    const TMap<FIntVector, int32>& VertexMap,
+    TArray<int32>& OutTriangles)
+{
+    // Get the vertices for the two cubes
+    const int32* V1 = VertexMap.Find(Cube1);
+    const int32* V2 = VertexMap.Find(Cube2);
+    
+    if (!V1 || !V2)
+    {
+        return; // One or both cubes don't have vertices
+    }
+    
     FIntVector Diff = Cube2 - Cube1;
     
     // Find two more vertices that complete the quad
