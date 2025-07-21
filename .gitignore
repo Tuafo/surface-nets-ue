@@ -1,0 +1,81 @@
+# Unreal Engine Files
+Binaries/
+Build/
+DerivedDataCache/
+Intermediate/
+Saved/
+*.opensdf
+*.sdf
+*.sln
+*.suo
+*.xcworkspace
+*.xcodeproj
+
+# Visual Studio Files
+.vs/
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+# Build Results
+**/Binaries/**
+**/Build/**
+**/Intermediate/**
+
+# UE4/UE5 Generated Files
+*.generated.h
+*.generated.cpp
+/Content/StarterContent/
+
+# Platform Specific
+*.app
+*.dSYM
+*.dylib
+*.exe
+*.pdb
+*.lib
+*.so
+*.dll
+*.framework
+
+# Temporary Files
+*~
+*.tmp
+*.bak
+*.swp
+*.DS_Store
+Thumbs.db
+
+# Package Files
+*.zip
+*.rar
+*.7z
+*.tar.gz
+
+# Logs
+*.log
+
+# IDE Files
+.vscode/
+.idea/
+
+# Mac
+.DS_Store
+__pycache__/
+
+# Windows
+*.exe
+*.dll
+*.pdb
+*.lib
+desktop.ini
+
+# Linux
+*.so
+*.a
+
+# Rider
+.idea/
+
+# Local configuration
+Config/LocalEngine.ini
