@@ -4,7 +4,7 @@
 
 /**
  * Surface Nets mesh generation algorithm implementation
- * Generates smooth meshes from voxel density fields
+ * Generates smooth meshes from voxel density fields using the fast surface nets approach
  */
 struct SURFACENETSUE_API FSurfaceNets
 {
@@ -21,7 +21,35 @@ public:
     );
 
 private:
-    /** Calculate vertex position using Surface Nets smoothing */
+    /** Phase 2: Create all quads from surface vertices (equivalent to make_all_quads in Rust) */
+    void MakeAllQuads(
+        const TArray<float>& DensityField,
+        int32 GridSize,
+        const TMap<FIntVector, int32>& VertexMap,
+        const TArray<int32>& VertexGrid,
+        TArray<int32>& OutTriangles
+    );
+    
+    /** Create a quad if there's a surface crossing between two adjacent cubes */
+    void MaybeCreateQuad(
+        const TArray<float>& DensityField,
+        int32 GridSize,
+        const TArray<int32>& VertexGrid,
+        const FIntVector& P1,
+        const FIntVector& P2,
+        const FIntVector& AxisB,
+        const FIntVector& AxisC,
+        TArray<int32>& OutTriangles
+    );
+
+    void CreateQuadBetweenCubes(
+        const FIntVector& Cube1,
+        const FIntVector& Cube2,
+        const TMap<FIntVector, int32>& VertexMap,
+        TArray<int32>& OutTriangles
+    );
+    
+    /** Calculate vertex position using Surface Nets smoothing (equivalent to estimate_surface in Rust) */
     FVector CalculateVertexPosition(
         const TArray<float>& DensityField,
         int32 GridSize,
@@ -43,49 +71,11 @@ private:
     /** Check if a cube contains the surface (density changes sign) */
     bool ContainsSurface(const TArray<float>& DensityField, int32 GridSize, int32 x, int32 y, int32 z);
     
-    /** Generate triangles for a cube face */
-    void GenerateCubeFace(
-        int32 CubeX, int32 CubeY, int32 CubeZ,
-        int32 Face,
-        const TArray<int32>& VertexIndices,
-        TArray<int32>& OutTriangles
-    );
-    
     /** Get vertex index for a cube, creating if necessary */
     int32 GetOrCreateVertex(int32 x, int32 y, int32 z, TMap<FIntVector, int32>& VertexMap);
     
     /** Get vertex index from vertex grid */
     int32 GetVertexIndex(const TArray<int32>& VertexGrid, int32 GridSize, int32 x, int32 y, int32 z);
-    
-    /** Connect two vertices with a triangle using a third neighboring vertex */
-    void ConnectToNeighbor(
-        const TArray<int32>& VertexGrid, 
-        int32 GridSize, 
-        int32 x1, int32 y1, int32 z1,
-        int32 x2, int32 y2, int32 z2,
-        TArray<int32>& OutTriangles
-    );
-    
-    /** Remove duplicate triangles from the triangle array */
-    void RemoveDuplicateTriangles(TArray<int32>& Triangles);
-    
-    /** Create a quad between two adjacent surface-crossing cubes */
-    void CreateQuadBetweenCubes(
-        const FIntVector& Cube1,
-        const FIntVector& Cube2,
-        const TMap<FIntVector, int32>& VertexMap,
-        TArray<int32>& OutTriangles
-    );
-    
-    /** Create triangles for the shared face between two adjacent cubes */
-    void CreateTrianglesForSharedFace(
-        const FIntVector& Cube1,
-        const FIntVector& Cube2,
-        int32 Vertex1,
-        int32 Vertex2,
-        const TMap<FIntVector, int32>& VertexMap,
-        TArray<int32>& OutTriangles
-    );
     
     /** Cube face directions for mesh generation */
     static const FIntVector CubeFaces[6][4];

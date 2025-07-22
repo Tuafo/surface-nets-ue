@@ -14,10 +14,10 @@ UNoiseGenerator::UNoiseGenerator()
 
 float UNoiseGenerator::SampleDensity(const FVector& WorldPosition) const
 {
-    // Calculate distance from planet center (considering planet center position)
+    // Calculate distance from planet center
     float DistanceFromCenter = (WorldPosition - PlanetCenter).Size();
     
-    // Base sphere
+    // Base sphere (positive outside, negative inside for Surface Nets)
     float SphereDensity = DistanceFromCenter - PlanetRadius;
     
     // Add terrain noise
@@ -25,9 +25,7 @@ float UNoiseGenerator::SampleDensity(const FVector& WorldPosition) const
     float TerrainHeight = TerrainNoise * NoiseAmplitude;
     
     // Combine sphere with terrain
-    float Density = SphereDensity + TerrainHeight;
-    
-    return -Density; // Negative inside, positive outside
+    return SphereDensity + TerrainHeight;
 }
 
 float UNoiseGenerator::SampleHeight(const FVector& SurfacePosition) const

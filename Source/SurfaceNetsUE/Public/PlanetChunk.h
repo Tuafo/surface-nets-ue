@@ -32,6 +32,9 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Chunk")
     int32 VoxelResolution;
     
+    /** Padding size for seamless chunk boundaries */
+    static constexpr int32 CHUNK_PADDING = 1;
+    
     /** Generated mesh data */
     TArray<FVector> Vertices;
     TArray<int32> Triangles;
@@ -47,7 +50,7 @@ public:
     /** Distance from camera for LOD calculations */
     float DistanceFromCamera;
     
-    /** Generate mesh data for this chunk */
+    /** Generate mesh data for this chunk with proper padding */
     void GenerateMesh(const class UNoiseGenerator* NoiseGenerator);
     
     /** Clear mesh data to free memory */
@@ -56,9 +59,22 @@ public:
     /** Get voxel resolution based on LOD level */
     int32 GetVoxelResolution() const;
     
+    /** Get padded voxel resolution (includes padding on all sides) */
+    int32 GetPaddedVoxelResolution() const;
+    
     /** Check if this chunk should be subdivided based on distance */
     bool ShouldSubdivide(float CameraDistance, float SubdivisionDistance) const;
     
     /** Check if this chunk should be merged based on distance */
     bool ShouldMerge(float CameraDistance, float MergeDistance) const;
+
+private:
+    /** Generate padded density field for seamless mesh generation */
+    void GeneratePaddedDensityField(
+        const class UNoiseGenerator* NoiseGenerator,
+        TArray<float>& OutDensityField,
+        int32& OutPaddedSize,
+        FVector& OutPaddedOrigin,
+        float& OutVoxelSize
+    );
 };

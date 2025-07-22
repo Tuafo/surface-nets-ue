@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
-#include "Math/ConvexVolume.h"
+#include "ConvexVolume.h"
 #include "PlanetChunk.h"
 #include "OctreeComponent.generated.h"
 
