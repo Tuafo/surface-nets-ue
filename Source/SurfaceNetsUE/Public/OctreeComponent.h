@@ -2,70 +2,115 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
-#include "ConvexVolume.h"
-#include "PlanetChunk.h"
 #include "OctreeComponent.generated.h"
 
-class UNoiseGenerator;
-class UProceduralMeshComponent;
+// Forward declarations
+struct FPlanetChunk;
 
-/**
- * Octree node for spatial subdivision and LOD management
- */
-struct SURFACENETSUE_API FOctreeNode
+USTRUCT(BlueprintType)
+struct SURFACENETSUE_API FOctreeKey
 {
-public:
-    FOctreeNode();
-    
-    // Delete copy constructor and assignment operator due to TUniquePtr member
-    FOctreeNode(const FOctreeNode&) = delete;
-    FOctreeNode& operator=(const FOctreeNode&) = delete;
-    
-    // Allow move constructor and assignment
-    FOctreeNode(FOctreeNode&&) = default;
-    FOctreeNode& operator=(FOctreeNode&&) = default;
-    
-    /** Center position of this node */
-    FVector Center;
-    
-    /** Size of this node */
-    float Size;
-    
-    /** LOD level (0 = highest detail) */
-    int32 LODLevel;
-    
-    /** Children nodes (null if leaf) */
-    TArray<TSharedPtr<FOctreeNode>> Children;
-    
-    /** Associated planet chunk (for leaf nodes) */
-    TUniquePtr<FPlanetChunk> Chunk;
-    
-    /** Whether this node is a leaf */
-    bool bIsLeaf;
-    
-    /** Whether this node should be rendered */
-    bool bShouldRender;
-    
-    /** Distance from camera */
-    float DistanceFromCamera;
-    
-    /** Subdivide this node into 8 children */
-    void Subdivide();
-    
-    /** Merge children back into this node */
-    void Merge();
-    
-    /** Update LOD based on camera position */
-    void UpdateLOD(const FVector& CameraPosition, const TArray<float>& LODDistances);
-    
-    /** Check if this node is in camera frustum */
-    bool IsInFrustum(const FConvexVolume& Frustum) const;
+    GENERATED_BODY()
+
+    /** Level in the octree (0 = highest detail) */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Octree")
+    int32 Level = 0;
+
+    /** Integer coordinates at this level */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Octree")
+    FIntVector Coordinates = FIntVector::ZeroValue;
+
+    FOctreeKey() = default;
+    FOctreeKey(int32 InLevel, const FIntVector& InCoordinates)
+        : Level(InLevel), Coordinates(InCoordinates) {}
+
+    /** Get parent key (one level up) */
+    FOctreeKey GetParent() const
+    {
+        return FOctreeKey(Level + 1, Coordinates >> 1);
+    }
+
+    /** Get child keys (one level down) */
+    TArray<FOctreeKey> GetChildren() const
+    {
+        TArray<FOctreeKey> Children;
+        Children.Reserve(8);
+        
+        for (int32 i = 0; i < 8; i++)
+        {
+            FIntVector ChildOffset(
+                (i & 1) ? 1 : 0,
+                (i & 2) ? 1 : 0,
+                (i & 4) ? 1 : 0
+            );
+            FIntVector ChildCoord = (Coordinates << 1) + ChildOffset;
+            Children.Add(FOctreeKey(Level - 1, ChildCoord));
+        }
+        return Children;
+    }
+
+    bool operator==(const FOctreeKey& Other) const
+    {
+        return Level == Other.Level && Coordinates == Other.Coordinates;
+    }
+
+    friend uint32 GetTypeHash(const FOctreeKey& Key)
+    {
+        return HashCombine(GetTypeHash(Key.Level), GetTypeHash(Key.Coordinates));
+    }
 };
 
-/**
- * Component that manages octree-based LOD for planet generation
- */
-UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
+USTRUCT(BlueprintType)
+struct SURFACENETSUE_API FOctreeNode
+{
+    GENERATED_BODY()
+
+    /** Key identifying this node */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Octree")
+    FOctreeKey Key;
+
+    /** World space center of this node */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Octree")
+    FVector Center = FVector::ZeroVector;
+
+    /** Size of this node */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Octree")
+    float Size = 0.0f;
+
+    /** Whether this node has children */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Octree")
+    bool bHasChildren = false;
+
+    /** Whether this node is active (should generate mesh) */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Octree")
+    bool bIsActive = false;
+
+    /** Distance from camera for LOD calculations */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Octree")
+    float DistanceFromCamera = 0.0f;
+
+    /** Planet chunk associated with this node */
+    TSharedPtr<FPlanetChunk> Chunk;
+
+    /** Child node indices (8 for octree) */
+    TArray<int32> ChildIndices;
+
+    /** Parent node index (-1 if root) */
+    int32 ParentIndex = -1;
+
+    FOctreeNode() 
+    {
+        ChildIndices.Init(-1, 8);
+    }
+
+    FOctreeNode(const FOctreeKey& InKey, const FVector& InCenter, float InSize)
+        : Key(InKey), Center(InCenter), Size(InSize)
+    {
+        ChildIndices.Init(-1, 8);
+    }
+};
+
+UCLASS(BlueprintType, Blueprintable, ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
 class SURFACENETSUE_API UOctreeComponent : public UActorComponent
 {
     GENERATED_BODY()
@@ -73,78 +118,78 @@ class SURFACENETSUE_API UOctreeComponent : public UActorComponent
 public:
     UOctreeComponent();
 
+    /** Maximum depth of the octree */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Octree LOD")
+    int32 MaxDepth = 8;
+
+    /** Size of the root octree node */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Octree LOD")
+    float RootSize = 4096.0f;
+
+    /** Distance at which nodes should subdivide */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Octree LOD")
+    float SubdivisionDistance = 1000.0f;
+
+    /** Multiplier for merge distance (merge at SubdivisionDistance * MergeDistanceMultiplier) */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Octree LOD")
+    float MergeDistanceMultiplier = 2.0f;
+
+    /** Update LOD based on camera position */
+    UFUNCTION(BlueprintCallable, Category = "Octree LOD")
+    void UpdateLOD(const FVector& CameraPosition);
+
+    /** Get all active chunks that should render */
+    UFUNCTION(BlueprintCallable, Category = "Octree LOD")
+    TArray<FPlanetChunk*> GetActiveChunks() const;
+
+    /** Initialize the octree */
+    UFUNCTION(BlueprintCallable, Category = "Octree LOD")
+    void InitializeOctree(const FVector& WorldCenter);
+
+    /** Clear all octree data */
+    UFUNCTION(BlueprintCallable, Category = "Octree LOD")
+    void ClearOctree();
+
 protected:
     virtual void BeginPlay() override;
 
-public:
-    virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
-
-    /** Maximum octree depth */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Octree")
-    int32 MaxDepth = 6;
-    
-    /** Root size of the octree */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Octree")
-    float RootSize = 4000.0f;
-    
-    /** LOD distances for different levels */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LOD")
-    TArray<float> LODDistances = {100.0f, 300.0f, 800.0f, 2000.0f, 5000.0f};
-    
-    /** Update frequency in seconds */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance")
-    float UpdateFrequency = 0.1f;
-    
-    /** Enable frustum culling */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance")
-    bool bEnableFrustumCulling = true;
-
-    /** Initialize the octree */
-    UFUNCTION(BlueprintCallable, Category = "Octree")
-    void InitializeOctree(const FVector& Center);
-    
-    /** Update LOD based on camera position */
-    UFUNCTION(BlueprintCallable, Category = "Octree")
-    void UpdateLOD(const FVector& CameraPosition);
-    
-    /** Get all visible chunks for rendering (C++ only) */
-    void GetVisibleChunks(TArray<FPlanetChunk*>& OutChunks);
-    
-    /** Get number of visible chunks (Blueprint accessible) */
-    UFUNCTION(BlueprintCallable, Category = "Octree")
-    int32 GetVisibleChunkCount() const;
-    
-    /** Get player location for LOD calculations */
-    UFUNCTION(BlueprintCallable, Category = "Octree")
-    FVector GetPlayerLocation() const;
-    
-    /** Set noise generator */
-    UFUNCTION(BlueprintCallable, Category = "Octree")
-    void SetNoiseGenerator(UNoiseGenerator* InNoiseGenerator);
-
-private:
-    /** Root node of the octree */
-    TSharedPtr<FOctreeNode> RootNode;
-    
-    /** Noise generator for terrain */
+    /** All nodes in the octree */
     UPROPERTY()
-    UNoiseGenerator* NoiseGenerator;
-    
-    /** Timer for LOD updates */
-    float UpdateTimer;
-    
-    /** Last player position */
-    FVector LastPlayerPosition;
-    
-    /** Recursively update LOD for node and children */
-    void UpdateNodeLOD(TSharedPtr<FOctreeNode> Node, const FVector& CameraPosition);
-    
-    /** Recursively collect visible chunks */
-    void CollectVisibleChunks(TSharedPtr<FOctreeNode> Node, TArray<FPlanetChunk*>& OutChunks);
-    
-    /** Generate mesh for a chunk */
-    void GenerateChunkMesh(FPlanetChunk* Chunk);
-    
-    /** Get camera frustum for culling */
-    bool GetCameraFrustum(FConvexVolume& OutFrustum) const;
+    TArray<FOctreeNode> Nodes;
+
+    /** Map from octree key to node index */
+    TMap<FOctreeKey, int32> KeyToNodeIndex;
+
+    /** Root node indices */
+    TArray<int32> RootIndices;
+
+    /** World center of the octree */
+    FVector WorldCenter = FVector::ZeroVector;
+
+    /** Create a new node */
+    int32 CreateNode(const FOctreeKey& Key, const FVector& Center, float Size, int32 ParentIndex = -1);
+
+    /** Subdivide a node into 8 children */
+    void SubdivideNode(int32 NodeIndex);
+
+    /** Merge a node's children back into the parent */
+    void MergeNode(int32 NodeIndex);
+
+    /** Check if a node should subdivide based on distance */
+    bool ShouldSubdivide(const FOctreeNode& Node, const FVector& CameraPosition) const;
+
+    /** Check if a node should merge based on distance */
+    bool ShouldMerge(const FOctreeNode& Node, const FVector& CameraPosition) const;
+
+    /** Update node activity status */
+    void UpdateNodeActivity(int32 NodeIndex, const FVector& CameraPosition);
+
+    /** Get world position for octree coordinates */
+    FVector GetWorldPosition(const FOctreeKey& Key, float NodeSize) const;
+
+    /** Calculate required chunk size for distance */
+    float CalculateRequiredChunkSize(float Distance) const;
+
+    /** Create or get chunk for node */
+    TSharedPtr<FPlanetChunk> GetOrCreateChunk(FOctreeNode& Node);
 };

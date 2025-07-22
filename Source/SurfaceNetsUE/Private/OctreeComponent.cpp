@@ -1,302 +1,305 @@
 #include "OctreeComponent.h"
-#include "NoiseGenerator.h"
-#include "Engine/World.h"
-#include "Engine/Engine.h"
-#include "Camera/CameraComponent.h"
-#include "GameFramework/PlayerController.h"
+#include "PlanetChunk.h"
 #include "SurfaceNetsUE.h"
-
-FOctreeNode::FOctreeNode()
-    : Center(FVector::ZeroVector)
-    , Size(0.0f)
-    , LODLevel(0)
-    , bIsLeaf(true)
-    , bShouldRender(false)
-    , DistanceFromCamera(0.0f)
-{
-    Children.SetNum(8);
-}
-
-void FOctreeNode::Subdivide()
-{
-    if (!bIsLeaf) return;
-    
-    bIsLeaf = false;
-    float ChildSize = Size * 0.5f;
-    float Offset = ChildSize * 0.5f;
-    
-    // Create 8 children
-    for (int32 i = 0; i < 8; i++)
-    {
-        Children[i] = MakeShared<FOctreeNode>();
-        FOctreeNode* Child = Children[i].Get();
-        
-        Child->Size = ChildSize;
-        Child->LODLevel = LODLevel + 1;
-        Child->bIsLeaf = true;
-        
-        // Calculate child center
-        FVector ChildOffset(
-            (i & 1) ? Offset : -Offset,
-            (i & 2) ? Offset : -Offset,
-            (i & 4) ? Offset : -Offset
-        );
-        Child->Center = Center + ChildOffset;
-    }
-    
-    // Clear chunk since this is no longer a leaf
-    Chunk.Reset();
-}
-
-void FOctreeNode::Merge()
-{
-    if (bIsLeaf) return;
-    
-    // Clear all children
-    for (auto& Child : Children)
-    {
-        Child.Reset();
-    }
-    
-    bIsLeaf = true;
-    bShouldRender = true;
-    
-    // Create new chunk for this merged node
-    Chunk = MakeUnique<FPlanetChunk>(Center, LODLevel, Size);
-}
-
-void FOctreeNode::UpdateLOD(const FVector& CameraPosition, const TArray<float>& LODDistances)
-{
-    DistanceFromCamera = FVector::Dist(Center, CameraPosition);
-    
-    // Determine if we should subdivide or merge based on distance
-    bool bShouldSubdivide = false;
-    if (LODLevel < LODDistances.Num() && DistanceFromCamera < LODDistances[LODLevel])
-    {
-        bShouldSubdivide = true;
-    }
-    
-    if (bShouldSubdivide && bIsLeaf)
-    {
-        Subdivide();
-    }
-    else if (!bShouldSubdivide && !bIsLeaf)
-    {
-        Merge();
-    }
-    
-    // Update children recursively
-    if (!bIsLeaf)
-    {
-        for (auto& Child : Children)
-        {
-            if (Child.IsValid())
-            {
-                Child->UpdateLOD(CameraPosition, LODDistances);
-            }
-        }
-    }
-    
-    // Update render flag
-    bShouldRender = bIsLeaf;
-}
-
-bool FOctreeNode::IsInFrustum(const FConvexVolume& Frustum) const
-{
-    // Simple sphere-frustum test
-    FVector MinBounds = Center - FVector(Size * 0.5f);
-    FVector MaxBounds = Center + FVector(Size * 0.5f);
-    FBoxSphereBounds Bounds(FBox(MinBounds, MaxBounds));
-    
-    return Frustum.IntersectSphere(Bounds.Origin, Bounds.SphereRadius);
-}
+#include "Engine/World.h"
 
 UOctreeComponent::UOctreeComponent()
 {
-    PrimaryComponentTick.bCanEverTick = true;
-    MaxDepth = 6;
-    RootSize = 4000.0f;
-    UpdateFrequency = 0.1f;
-    bEnableFrustumCulling = true;
-    UpdateTimer = 0.0f;
-    NoiseGenerator = nullptr;
-    LastPlayerPosition = FVector::ZeroVector;
-    
-    // Default LOD distances
-    LODDistances = {100.0f, 300.0f, 800.0f, 2000.0f, 5000.0f};
+    PrimaryComponentTick.bCanEverTick = false;
 }
 
 void UOctreeComponent::BeginPlay()
 {
     Super::BeginPlay();
-    
-    // Initialize octree at world origin
-    InitializeOctree(FVector::ZeroVector);
 }
 
-void UOctreeComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+void UOctreeComponent::InitializeOctree(const FVector& InWorldCenter)
 {
-    Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
-    
-    UpdateTimer += DeltaTime;
-    
-    if (UpdateTimer >= UpdateFrequency)
-    {
-        UpdateTimer = 0.0f;
-        
-        // Get player position using simplified approach
-        FVector PlayerPosition = GetPlayerLocation();
-        
-        // Only update if player moved significantly
-        if (FVector::Dist(PlayerPosition, LastPlayerPosition) > 10.0f)
-        {
-            UpdateLOD(PlayerPosition);
-            LastPlayerPosition = PlayerPosition;
-        }
-    }
+    WorldCenter = InWorldCenter;
+    ClearOctree();
+
+    // Create root nodes - we'll create a single root for now
+    FOctreeKey RootKey(MaxDepth, FIntVector::ZeroValue);
+    int32 RootIndex = CreateNode(RootKey, WorldCenter, RootSize);
+    RootIndices.Add(RootIndex);
 }
 
-void UOctreeComponent::InitializeOctree(const FVector& Center)
+void UOctreeComponent::ClearOctree()
 {
-    RootNode = MakeShared<FOctreeNode>();
-    RootNode->Center = Center;
-    RootNode->Size = RootSize;
-    RootNode->LODLevel = 0;
-    RootNode->bIsLeaf = true;
-    RootNode->bShouldRender = true;
+    Nodes.Empty();
+    KeyToNodeIndex.Empty();
+    RootIndices.Empty();
+}
+
+int32 UOctreeComponent::CreateNode(const FOctreeKey& Key, const FVector& Center, float Size, int32 ParentIndex)
+{
+    int32 NodeIndex = Nodes.Num();
     
-    UE_LOG(LogSurfaceNets, Log, TEXT("Octree initialized at %s with size %f"), *Center.ToString(), RootSize);
+    FOctreeNode& NewNode = Nodes.AddDefaulted_GetRef();
+    NewNode.Key = Key;
+    NewNode.Center = Center;
+    NewNode.Size = Size;
+    NewNode.ParentIndex = ParentIndex;
+    
+    KeyToNodeIndex.Add(Key, NodeIndex);
+    
+    return NodeIndex;
 }
 
 void UOctreeComponent::UpdateLOD(const FVector& CameraPosition)
 {
-    if (!RootNode.IsValid())
+    if (RootIndices.IsEmpty())
     {
         return;
     }
-    
-    UpdateNodeLOD(RootNode, CameraPosition);
-}
 
-void UOctreeComponent::GetVisibleChunks(TArray<FPlanetChunk*>& OutChunks)
-{
-    OutChunks.Empty();
-    
-    if (!RootNode.IsValid())
+    // Process all nodes starting from roots
+    TQueue<int32> NodesToProcess;
+    for (int32 RootIndex : RootIndices)
     {
-        return;
+        NodesToProcess.Enqueue(RootIndex);
     }
-    
-    CollectVisibleChunks(RootNode, OutChunks);
-}
 
-int32 UOctreeComponent::GetVisibleChunkCount() const
-{
-    TArray<FPlanetChunk*> VisibleChunks;
-    if (!RootNode.IsValid())
+    while (!NodesToProcess.IsEmpty())
     {
-        return 0;
-    }
-    
-    // We need a mutable version for the const function
-    const_cast<UOctreeComponent*>(this)->CollectVisibleChunks(RootNode, VisibleChunks);
-    return VisibleChunks.Num();
-}
-
-FVector UOctreeComponent::GetPlayerLocation() const
-{
-    // Simplified player location getter - much more reliable than complex camera calculations
-    if (UWorld* World = GetWorld())
-    {
-        if (APlayerController* PC = World->GetFirstPlayerController())
+        int32 NodeIndex;
+        NodesToProcess.Dequeue(NodeIndex);
+        
+        if (!Nodes.IsValidIndex(NodeIndex))
         {
-            if (APawn* Pawn = PC->GetPawn())
+            continue;
+        }
+
+        FOctreeNode& Node = Nodes[NodeIndex];
+        Node.DistanceFromCamera = FVector::Dist(CameraPosition, Node.Center);
+
+        bool bShouldSubdivide = ShouldSubdivide(Node, CameraPosition);
+        bool bShouldMerge = ShouldMerge(Node, CameraPosition);
+
+        if (bShouldSubdivide && !Node.bHasChildren && Node.Key.Level > 0)
+        {
+            SubdivideNode(NodeIndex);
+        }
+        else if (bShouldMerge && Node.bHasChildren)
+        {
+            MergeNode(NodeIndex);
+        }
+
+        // Update activity and process children
+        UpdateNodeActivity(NodeIndex, CameraPosition);
+
+        if (Node.bHasChildren)
+        {
+            for (int32 ChildIndex : Node.ChildIndices)
             {
-                return Pawn->GetActorLocation();
+                if (ChildIndex != -1)
+                {
+                    NodesToProcess.Enqueue(ChildIndex);
+                }
             }
         }
     }
-    
-    // Fallback to world origin
-    return FVector::ZeroVector;
 }
 
-void UOctreeComponent::SetNoiseGenerator(UNoiseGenerator* InNoiseGenerator)
+void UOctreeComponent::SubdivideNode(int32 NodeIndex)
 {
-    NoiseGenerator = InNoiseGenerator;
-}
-
-void UOctreeComponent::UpdateNodeLOD(TSharedPtr<FOctreeNode> Node, const FVector& CameraPosition)
-{
-    if (!Node.IsValid())
+    if (!Nodes.IsValidIndex(NodeIndex))
     {
         return;
     }
-    
-    Node->UpdateLOD(CameraPosition, LODDistances);
-    
-    // Generate mesh for leaf nodes
-    if (Node->bIsLeaf && Node->bShouldRender)
+
+    FOctreeNode& Node = Nodes[NodeIndex];
+    if (Node.bHasChildren || Node.Key.Level <= 0)
     {
-        if (!Node->Chunk.IsValid())
-        {
-            Node->Chunk = MakeUnique<FPlanetChunk>(Node->Center, Node->LODLevel, Node->Size);
-        }
+        return;
+    }
+
+    // Create 8 child nodes
+    TArray<FOctreeKey> ChildKeys = Node.Key.GetChildren();
+    float ChildSize = Node.Size * 0.5f;
+
+    for (int32 i = 0; i < 8; i++)
+    {
+        FOctreeKey ChildKey = ChildKeys[i];
         
-        if (!Node->Chunk->bIsGenerated && !Node->Chunk->bIsGenerating && NoiseGenerator)
-        {
-            GenerateChunkMesh(Node->Chunk.Get());
-        }
+        // Calculate child center
+        FVector ChildOffset(
+            (i & 1) ? ChildSize * 0.5f : -ChildSize * 0.5f,
+            (i & 2) ? ChildSize * 0.5f : -ChildSize * 0.5f,
+            (i & 4) ? ChildSize * 0.5f : -ChildSize * 0.5f
+        );
+        FVector ChildCenter = Node.Center + ChildOffset;
+
+        int32 ChildIndex = CreateNode(ChildKey, ChildCenter, ChildSize, NodeIndex);
+        Node.ChildIndices[i] = ChildIndex;
     }
+
+    Node.bHasChildren = true;
+    Node.bIsActive = false; // Parent becomes inactive when subdivided
 }
 
-void UOctreeComponent::CollectVisibleChunks(TSharedPtr<FOctreeNode> Node, TArray<FPlanetChunk*>& OutChunks)
+void UOctreeComponent::MergeNode(int32 NodeIndex)
 {
-    if (!Node.IsValid() || !Node->bShouldRender)
+    if (!Nodes.IsValidIndex(NodeIndex))
     {
         return;
     }
-    
-    // Frustum culling
-    if (bEnableFrustumCulling)
-    {
-        FConvexVolume Frustum;
-        if (GetCameraFrustum(Frustum) && !Node->IsInFrustum(Frustum))
-        {
-            return;
-        }
-    }
-    
-    if (Node->bIsLeaf && Node->Chunk.IsValid() && Node->Chunk->bIsGenerated)
-    {
-        OutChunks.Add(Node->Chunk.Get());
-    }
-    else if (!Node->bIsLeaf)
-    {
-        for (auto& Child : Node->Children)
-        {
-            CollectVisibleChunks(Child, OutChunks);
-        }
-    }
-}
 
-void UOctreeComponent::GenerateChunkMesh(FPlanetChunk* Chunk)
-{
-    if (!Chunk || !NoiseGenerator)
+    FOctreeNode& Node = Nodes[NodeIndex];
+    if (!Node.bHasChildren)
     {
         return;
     }
-    
-    // Generate mesh data
-    Chunk->GenerateMesh(NoiseGenerator);
-    
-    UE_LOG(LogSurfaceNets, Verbose, TEXT("Generated mesh for chunk at %s with %d vertices"), 
-        *Chunk->Position.ToString(), Chunk->Vertices.Num());
+
+    // Remove all children and their descendants
+    TQueue<int32> NodesToRemove;
+    for (int32 ChildIndex : Node.ChildIndices)
+    {
+        if (ChildIndex != -1)
+        {
+            NodesToRemove.Enqueue(ChildIndex);
+        }
+    }
+
+    while (!NodesToRemove.IsEmpty())
+    {
+        int32 IndexToRemove;
+        NodesToRemove.Dequeue(IndexToRemove);
+        
+        if (!Nodes.IsValidIndex(IndexToRemove))
+        {
+            continue;
+        }
+
+        FOctreeNode& NodeToRemove = Nodes[IndexToRemove];
+        
+        // Add children to removal queue
+        if (NodeToRemove.bHasChildren)
+        {
+            for (int32 GrandChildIndex : NodeToRemove.ChildIndices)
+            {
+                if (GrandChildIndex != -1)
+                {
+                    NodesToRemove.Enqueue(GrandChildIndex);
+                }
+            }
+        }
+
+        // Remove from key map
+        KeyToNodeIndex.Remove(NodeToRemove.Key);
+        
+        // Clear the node (we keep the array to avoid index shifting)
+        NodeToRemove = FOctreeNode();
+    }
+
+    // Reset parent node
+    Node.bHasChildren = false;
+    Node.bIsActive = true;
+    Node.ChildIndices.Init(-1, 8);
 }
 
-bool UOctreeComponent::GetCameraFrustum(FConvexVolume& OutFrustum) const
+bool UOctreeComponent::ShouldSubdivide(const FOctreeNode& Node, const FVector& CameraPosition) const
 {
-    // Simplified approach: disable frustum culling for now and rely on distance-based LOD
-    // Using player location is simpler and more efficient for planet generation
-    return false;
+    if (Node.Key.Level <= 0)
+    {
+        return false;
+    }
+
+    float RequiredSize = CalculateRequiredChunkSize(Node.DistanceFromCamera);
+    return Node.Size > RequiredSize;
+}
+
+bool UOctreeComponent::ShouldMerge(const FOctreeNode& Node, const FVector& CameraPosition) const
+{
+    if (!Node.bHasChildren)
+    {
+        return false;
+    }
+
+    float RequiredSize = CalculateRequiredChunkSize(Node.DistanceFromCamera);
+    float MergeThreshold = RequiredSize * MergeDistanceMultiplier;
+    return Node.Size < MergeThreshold;
+}
+
+void UOctreeComponent::UpdateNodeActivity(int32 NodeIndex, const FVector& CameraPosition)
+{
+    if (!Nodes.IsValidIndex(NodeIndex))
+    {
+        return;
+    }
+
+    FOctreeNode& Node = Nodes[NodeIndex];
+    
+    // Node is active if it has no children (leaf node)
+    Node.bIsActive = !Node.bHasChildren;
+    
+    if (Node.bIsActive)
+    {
+        // Ensure chunk exists for active nodes
+        if (!Node.Chunk.IsValid())
+        {
+            Node.Chunk = GetOrCreateChunk(Node);
+        }
+    }
+    else
+    {
+        // Clear chunk for inactive nodes
+        Node.Chunk.Reset();
+    }
+}
+
+TSharedPtr<FPlanetChunk> UOctreeComponent::GetOrCreateChunk(FOctreeNode& Node)
+{
+    if (Node.Chunk.IsValid())
+    {
+        return Node.Chunk;
+    }
+
+    // Create new chunk
+    TSharedPtr<FPlanetChunk> NewChunk = MakeShared<FPlanetChunk>();
+    NewChunk->Position = Node.Center;
+    NewChunk->Size = Node.Size;
+    NewChunk->LODLevel = MaxDepth - Node.Key.Level; // Convert to 0-based LOD
+    NewChunk->VoxelResolution = NewChunk->GetVoxelResolution();
+    NewChunk->DistanceFromCamera = Node.DistanceFromCamera;
+
+    return NewChunk;
+}
+
+float UOctreeComponent::CalculateRequiredChunkSize(float Distance) const
+{
+    // Calculate chunk size based on distance
+    // Closer = smaller chunks (higher detail)
+    // Further = larger chunks (lower detail)
+    float MinChunkSize = RootSize / FMath::Pow(2.0f, static_cast<float>(MaxDepth));
+    float MaxChunkSize = RootSize;
+    
+    // Use exponential scaling based on subdivision distance
+    float NormalizedDistance = Distance / SubdivisionDistance;
+    float ChunkSize = MinChunkSize * FMath::Pow(2.0f, NormalizedDistance);
+    
+    return FMath::Clamp(ChunkSize, MinChunkSize, MaxChunkSize);
+}
+
+FVector UOctreeComponent::GetWorldPosition(const FOctreeKey& Key, float NodeSize) const
+{
+    // Convert octree coordinates to world position
+    float LevelSize = RootSize / FMath::Pow(2.0f, static_cast<float>(Key.Level));
+    FVector Offset = FVector(Key.Coordinates) * LevelSize;
+    return WorldCenter + Offset;
+}
+
+TArray<FPlanetChunk*> UOctreeComponent::GetActiveChunks() const
+{
+    TArray<FPlanetChunk*> ActiveChunks;
+    
+    for (const FOctreeNode& Node : Nodes)
+    {
+        if (Node.bIsActive && Node.Chunk.IsValid())
+        {
+            ActiveChunks.Add(Node.Chunk.Get());
+        }
+    }
+    
+    return ActiveChunks;
 }

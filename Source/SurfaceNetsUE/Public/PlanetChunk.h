@@ -5,7 +5,7 @@
 #include "PlanetChunk.generated.h"
 
 /**
- * Represents a single chunk of planet terrain
+ * Represents a single chunk of planet terrain with octree integration
  */
 USTRUCT(BlueprintType)
 struct SURFACENETSUE_API FPlanetChunk
@@ -31,6 +31,9 @@ public:
     /** Voxel resolution for this chunk */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Chunk")
     int32 VoxelResolution;
+    
+    /** Base voxel resolution per LOD level */
+    static constexpr int32 BASE_VOXEL_RESOLUTION = 32;
     
     /** Padding size for seamless chunk boundaries */
     static constexpr int32 CHUNK_PADDING = 1;
