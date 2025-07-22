@@ -5,12 +5,12 @@
 #include "ProceduralMeshComponent.h"
 #include "PlanetActor.generated.h"
 
-class UOctreeComponent;
 class UNoiseGenerator;
 struct FPlanetChunk;
 
 /**
- * Main planet actor that manages procedural planet generation
+ * Main planet actor that manages procedural sphere generation using Surface Nets
+ * Based on the fast-surface-nets-rs implementation for seamless chunk boundaries
  */
 UCLASS(BlueprintType, Blueprintable)
 class SURFACENETSUE_API APlanetActor : public AActor
@@ -30,15 +30,11 @@ public:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
     USceneComponent* RootSceneComponent;
     
-    /** Octree component for LOD management */
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
-    UOctreeComponent* OctreeComponent;
-    
     /** Noise generator for terrain */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
     UNoiseGenerator* NoiseGenerator;
     
-    /** Procedural mesh components pool */
+    /** Procedural mesh components for chunks */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
     TArray<UProceduralMeshComponent*> MeshComponents;
 
@@ -46,9 +42,17 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet")
     float PlanetRadius = 1000.0f;
     
-    /** Maximum number of mesh components to pool */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance")
-    int32 MaxMeshComponents = 100;
+    /** Chunk size for dividing the sphere (recommended: 64.0f for good detail) */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet")
+    float ChunkSize = 64.0f;
+    
+    /** Number of chunks per axis (creates ChunksPerAxis^3 total grid, but only sphere-intersecting chunks are generated) */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet")
+    int32 ChunksPerAxis = 16;
+    
+    /** Base voxel resolution per chunk (will be padded to VoxelsPerChunk+2 for seamless boundaries) */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet")
+    int32 VoxelsPerChunk = 16;
     
     /** Material to apply to planet chunks */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering")
@@ -57,46 +61,22 @@ public:
     /** Enable collision for planet chunks */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics")
     bool bEnableCollision = true;
-    
-    /** Update frequency for mesh updates */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Performance")
-    float MeshUpdateFrequency = 0.2f;
 
-    /** Initialize the planet */
+    /** Initialize the planet with current parameters */
     UFUNCTION(BlueprintCallable, Category = "Planet")
     void InitializePlanet();
     
-    /** Update planet meshes */
+    /** Generate all chunks for the sphere (only generates chunks that intersect sphere surface) */
     UFUNCTION(BlueprintCallable, Category = "Planet")
-    void UpdatePlanetMeshes();
-    
-    /** Get or create a mesh component from the pool */
-    UFUNCTION(BlueprintCallable, Category = "Planet")
-    UProceduralMeshComponent* GetMeshComponent();
-    
-    /** Return a mesh component to the pool */
-    UFUNCTION(BlueprintCallable, Category = "Planet")
-    void ReturnMeshComponent(UProceduralMeshComponent* MeshComponent);
+    void GenerateAllChunks();
 
 private:
-    /** Timer for mesh updates */
-    float MeshUpdateTimer;
+    /** Array of planet chunks */
+    TArray<TUniquePtr<FPlanetChunk>> PlanetChunks;
     
-    /** Pool of available mesh components */
-    TArray<UProceduralMeshComponent*> AvailableMeshComponents;
-    
-    /** Currently used mesh components */
-    TArray<UProceduralMeshComponent*> UsedMeshComponents;
-    
-    /** Chunks that need mesh updates */
-    TArray<FPlanetChunk*> ChunksNeedingUpdate;
-    
-    /** Create a new mesh component */
+    /** Create a new mesh component at runtime */
     UProceduralMeshComponent* CreateMeshComponent();
     
-    /** Update mesh for a specific chunk */
-    void UpdateChunkMesh(FPlanetChunk* Chunk, UProceduralMeshComponent* MeshComponent);
-    
-    /** Clear unused mesh components */
-    void ClearUnusedMeshComponents();
+    /** Generate chunk at specific grid position with given world center */
+    void GenerateChunk(int32 X, int32 Y, int32 Z, const FVector& ChunkCenter);
 };

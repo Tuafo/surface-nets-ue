@@ -1,32 +1,30 @@
 #include "PlanetActor.h"
-#include "OctreeComponent.h"
 #include "NoiseGenerator.h"
 #include "PlanetChunk.h"
-#include "SurfaceNetsUE.h"
-#include "Components/SceneComponent.h"
-#include "ProceduralMeshComponent.h"
+#include "SurfaceNets.h"
 #include "Engine/Engine.h"
+#include "Components/StaticMeshComponent.h"
+#include "Materials/MaterialInterface.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogSurfaceNets, Log, All);
 
 APlanetActor::APlanetActor()
 {
     PrimaryActorTick.bCanEverTick = true;
-
+    
     // Create root component
     RootSceneComponent = CreateDefaultSubobject<USceneComponent>(TEXT("RootSceneComponent"));
     RootComponent = RootSceneComponent;
     
-    // Create octree component
-    OctreeComponent = CreateDefaultSubobject<UOctreeComponent>(TEXT("OctreeComponent"));
-    
     // Create noise generator
     NoiseGenerator = CreateDefaultSubobject<UNoiseGenerator>(TEXT("NoiseGenerator"));
     
-    // Initialize parameters
+    // Initialize parameters - adjusted for proper sphere generation
     PlanetRadius = 1000.0f;
-    MaxMeshComponents = 100;
+    ChunkSize = 64.0f;  // Smaller chunks for better detail
+    ChunksPerAxis = 16; // More chunks to cover sphere properly
+    VoxelsPerChunk = 16; // Base resolution, will be 18x18x18 with padding
     bEnableCollision = true;
-    MeshUpdateFrequency = 0.2f;
-    MeshUpdateTimer = 0.0f;
     PlanetMaterial = nullptr;
 }
 
@@ -41,21 +39,13 @@ void APlanetActor::BeginPlay()
 void APlanetActor::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
-    
-    MeshUpdateTimer += DeltaTime;
-    
-    if (MeshUpdateTimer >= MeshUpdateFrequency)
-    {
-        MeshUpdateTimer = 0.0f;
-        UpdatePlanetMeshes();
-    }
 }
 
 void APlanetActor::InitializePlanet()
 {
-    if (!OctreeComponent || !NoiseGenerator)
+    if (!NoiseGenerator)
     {
-        UE_LOG(LogSurfaceNets, Error, TEXT("Missing required components for planet initialization"));
+        UE_LOG(LogSurfaceNets, Error, TEXT("Missing noise generator for planet initialization"));
         return;
     }
     
@@ -64,176 +54,136 @@ void APlanetActor::InitializePlanet()
     NoiseGenerator->PlanetRadius = PlanetRadius;
     NoiseGenerator->PlanetCenter = ActorPosition;
     
-    // Set noise generator in octree
-    OctreeComponent->SetNoiseGenerator(NoiseGenerator);
+    // Generate all chunks immediately
+    GenerateAllChunks();
     
-    // Scale octree and LOD distances based on planet radius
-    OctreeComponent->RootSize = PlanetRadius * 2.5f; // Scale octree size with planet radius
-    
-    // Scale LOD distances based on planet radius
-    TArray<float> ScaledLODDistances;
-    float RadiusScale = PlanetRadius / 1000.0f; // Base scaling (1000.0f is the default radius)
-    ScaledLODDistances.Add(50.0f * RadiusScale);   // Close detail
-    ScaledLODDistances.Add(150.0f * RadiusScale);  // Medium detail
-    ScaledLODDistances.Add(400.0f * RadiusScale);  // Lower detail
-    ScaledLODDistances.Add(1000.0f * RadiusScale); // Distant detail
-    ScaledLODDistances.Add(2500.0f * RadiusScale); // Very distant
-    OctreeComponent->LODDistances = ScaledLODDistances;
-    
-    // Initialize octree at actor's position
-    OctreeComponent->InitializeOctree(ActorPosition);
-    
-    // Pre-create some mesh components
-    for (int32 i = 0; i < FMath::Min(MaxMeshComponents / 4, 25); i++)
-    {
-        UProceduralMeshComponent* MeshComp = CreateMeshComponent();
-        AvailableMeshComponents.Add(MeshComp);
-    }
-    
-    UE_LOG(LogSurfaceNets, Log, TEXT("Planet initialized at %s with radius %f, scaled LOD distances"), *ActorPosition.ToString(), PlanetRadius);
+    UE_LOG(LogSurfaceNets, Log, TEXT("Planet initialized at %s with radius %f and %d chunks"), 
+           *ActorPosition.ToString(), PlanetRadius, PlanetChunks.Num());
 }
 
-void APlanetActor::UpdatePlanetMeshes()
+void APlanetActor::GenerateAllChunks()
 {
-    if (!OctreeComponent)
+    // Clear existing chunks and mesh components
+    PlanetChunks.Empty();
+    
+    // Destroy existing mesh components
+    for (UProceduralMeshComponent* MeshComp : MeshComponents)
     {
-        return;
-    }
-    
-    // Get visible chunks from octree
-    TArray<FPlanetChunk*> VisibleChunks;
-    OctreeComponent->GetVisibleChunks(VisibleChunks);
-    
-    // Clear all currently used mesh components
-    ClearUnusedMeshComponents();
-    
-    // Update meshes for visible chunks
-    for (FPlanetChunk* Chunk : VisibleChunks)
-    {
-        if (Chunk && Chunk->bIsGenerated && Chunk->Vertices.Num() > 0)
+        if (MeshComp && IsValid(MeshComp))
         {
-            UProceduralMeshComponent* MeshComp = GetMeshComponent();
-            if (MeshComp)
+            MeshComp->DestroyComponent();
+        }
+    }
+    MeshComponents.Empty();
+    
+    // Calculate chunk bounds to cover sphere properly
+    float TotalSize = ChunksPerAxis * ChunkSize;
+    float HalfSize = TotalSize * 0.5f;
+    FVector StartPosition = GetActorLocation() - FVector(HalfSize, HalfSize, HalfSize);
+    
+    // Generate chunks in a grid pattern
+    int32 GeneratedChunks = 0;
+    for (int32 X = 0; X < ChunksPerAxis; X++)
+    {
+        for (int32 Y = 0; Y < ChunksPerAxis; Y++)
+        {
+            for (int32 Z = 0; Z < ChunksPerAxis; Z++)
             {
-                UpdateChunkMesh(Chunk, MeshComp);
-                UsedMeshComponents.Add(MeshComp);
+                // Calculate chunk center
+                FVector ChunkCenter = StartPosition + FVector(
+                    (X * ChunkSize) + (ChunkSize * 0.5f),
+                    (Y * ChunkSize) + (ChunkSize * 0.5f),
+                    (Z * ChunkSize) + (ChunkSize * 0.5f)
+                );
+                
+                // Only generate chunks that might intersect the sphere
+                float DistanceToSphere = FVector::Dist(ChunkCenter, GetActorLocation());
+                float ChunkRadius = ChunkSize * 1.732f; // sqrt(3) for diagonal
+                
+                // Generate chunk if it might contain part of the sphere surface
+                if (DistanceToSphere < PlanetRadius + ChunkRadius && 
+                    DistanceToSphere > PlanetRadius - ChunkRadius)
+                {
+                    GenerateChunk(X, Y, Z, ChunkCenter);
+                    GeneratedChunks++;
+                }
             }
         }
     }
     
-    UE_LOG(LogSurfaceNets, Verbose, TEXT("Updated %d chunk meshes"), VisibleChunks.Num());
+    UE_LOG(LogSurfaceNets, Log, TEXT("Generated %d chunks for sphere (out of %d total grid positions)"), 
+           GeneratedChunks, ChunksPerAxis * ChunksPerAxis * ChunksPerAxis);
 }
 
-UProceduralMeshComponent* APlanetActor::GetMeshComponent()
+void APlanetActor::GenerateChunk(int32 X, int32 Y, int32 Z, const FVector& ChunkCenter)
 {
-    // Try to get from available pool
-    if (AvailableMeshComponents.Num() > 0)
-    {
-        UProceduralMeshComponent* MeshComp = AvailableMeshComponents.Pop();
-        return MeshComp;
-    }
+    // Create chunk with proper LOD level
+    TUniquePtr<FPlanetChunk> NewChunk = MakeUnique<FPlanetChunk>(ChunkCenter, 0, ChunkSize);
     
-    // Create new one if pool is empty and we haven't hit the limit
-    if (MeshComponents.Num() < MaxMeshComponents)
-    {
-        return CreateMeshComponent();
-    }
+    // Set the base voxel resolution (will be padded internally)
+    NewChunk->VoxelResolution = VoxelsPerChunk;
     
-    // No components available
-    return nullptr;
-}
-
-void APlanetActor::ReturnMeshComponent(UProceduralMeshComponent* MeshComponent)
-{
-    if (MeshComponent)
+    // Generate mesh using the existing FPlanetChunk::GenerateMesh method
+    // This should handle boundary padding internally
+    NewChunk->GenerateMesh(NoiseGenerator);
+    
+    // Only create mesh component if chunk has valid mesh data
+    if (NewChunk->bIsGenerated && NewChunk->Vertices.Num() > 0 && NewChunk->Triangles.Num() > 0)
     {
-        // Clear the mesh and hide it
-        MeshComponent->ClearAllMeshSections();
-        MeshComponent->SetVisibility(false);
+        // Create mesh component
+        UProceduralMeshComponent* MeshComponent = CreateMeshComponent();
         
-        // Return to available pool
-        AvailableMeshComponents.AddUnique(MeshComponent);
-        UsedMeshComponents.Remove(MeshComponent);
+        // Create mesh section using the chunk's existing mesh data
+        TArray<FColor> VertexColors;
+        TArray<FProcMeshTangent> Tangents;
+        
+        // Apply the chunk's world position offset to vertices
+        TArray<FVector> WorldVertices = NewChunk->Vertices;
+        // Vertices should already be in world coordinates from the chunk generation
+        
+        MeshComponent->CreateMeshSection(
+            0,
+            WorldVertices,
+            NewChunk->Triangles,
+            NewChunk->Normals,
+            NewChunk->UVs,
+            VertexColors,
+            Tangents,
+            bEnableCollision
+        );
+        
+        // Apply material
+        if (PlanetMaterial)
+        {
+            MeshComponent->SetMaterial(0, PlanetMaterial);
+        }
+        
+        // Store mesh component reference
+        MeshComponents.Add(MeshComponent);
+        
+        UE_LOG(LogSurfaceNets, Verbose, TEXT("Generated chunk at (%d,%d,%d) with %d vertices, %d triangles"), 
+               X, Y, Z, WorldVertices.Num(), NewChunk->Triangles.Num() / 3);
     }
+    
+    PlanetChunks.Add(MoveTemp(NewChunk));
 }
 
 UProceduralMeshComponent* APlanetActor::CreateMeshComponent()
 {
-    FString CompName = FString::Printf(TEXT("PlanetMesh_%d"), MeshComponents.Num());
-    UProceduralMeshComponent* MeshComp = NewObject<UProceduralMeshComponent>(this, *CompName);
+    // Create component at runtime using NewObject
+    UProceduralMeshComponent* MeshComponent = NewObject<UProceduralMeshComponent>(this);
     
-    if (MeshComp)
+    // Attach to root component
+    MeshComponent->SetupAttachment(RootComponent);
+    
+    // Set collision
+    MeshComponent->SetCollisionEnabled(bEnableCollision ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
+    
+    // Register the component with the world
+    if (GetWorld())
     {
-        // Register the component with the actor
-        MeshComp->RegisterComponent();
-        
-        // Attach to root component
-        MeshComp->AttachToComponent(RootComponent, FAttachmentTransformRules::KeepRelativeTransform);
-        
-        // Set material if available
-        if (PlanetMaterial)
-        {
-            MeshComp->SetMaterial(0, PlanetMaterial);
-        }
-        
-        // Configure collision
-        if (bEnableCollision)
-        {
-            MeshComp->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-            MeshComp->SetCollisionObjectType(ECollisionChannel::ECC_WorldStatic);
-        }
-        else
-        {
-            MeshComp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-        }
-        
-        MeshComponents.Add(MeshComp);
+        MeshComponent->RegisterComponent();
     }
     
-    return MeshComp;
-}
-
-void APlanetActor::UpdateChunkMesh(FPlanetChunk* Chunk, UProceduralMeshComponent* MeshComponent)
-{
-    if (!Chunk || !MeshComponent || !Chunk->bIsGenerated)
-    {
-        return;
-    }
-    
-    // Clear existing mesh sections
-    MeshComponent->ClearAllMeshSections();
-    
-    // Create mesh section with chunk data
-    if (Chunk->Vertices.Num() > 0 && Chunk->Triangles.Num() > 0)
-    {
-        TArray<FLinearColor> VertexColors; // Empty for now
-        TArray<FProcMeshTangent> Tangents;  // Empty for now
-        
-        MeshComponent->CreateMeshSection_LinearColor(
-            0,                          // Section index
-            Chunk->Vertices,           // Vertices
-            Chunk->Triangles,          // Triangles
-            Chunk->Normals,            // Normals
-            Chunk->UVs,                // UVs
-            VertexColors,              // Vertex colors
-            Tangents,                  // Tangents
-            bEnableCollision           // Create collision
-        );
-        
-        // Set world position
-        FVector ChunkWorldPos = Chunk->Position;
-        MeshComponent->SetWorldLocation(ChunkWorldPos);
-        MeshComponent->SetVisibility(true);
-    }
-}
-
-void APlanetActor::ClearUnusedMeshComponents()
-{
-    // Return all currently used mesh components to the pool
-    for (UProceduralMeshComponent* MeshComp : UsedMeshComponents)
-    {
-        ReturnMeshComponent(MeshComp);
-    }
-    
-    UsedMeshComponents.Empty();
+    return MeshComponent;
 }

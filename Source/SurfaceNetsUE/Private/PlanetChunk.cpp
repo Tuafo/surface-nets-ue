@@ -115,28 +115,32 @@ void FPlanetChunk::GeneratePaddedDensityField(
     FVector& OutPaddedOrigin,
     float& OutVoxelSize)
 {
-    // Calculate padded dimensions
-    int32 BaseResolution = VoxelResolution;
-    OutPaddedSize = BaseResolution + 2 * CHUNK_PADDING + 1; // +1 for Surface Nets grid
-    OutVoxelSize = Size / BaseResolution;
+    // Add 1-voxel padding on all sides (like Rust implementation)
+    int32 PaddedResolution = VoxelResolution + 2; // +2 for padding on both sides
+    OutPaddedSize = PaddedResolution;
     
-    // Calculate padded origin (extends beyond chunk boundaries)
-    FVector ChunkOrigin = Position - FVector(Size * 0.5f);
-    OutPaddedOrigin = ChunkOrigin - FVector(CHUNK_PADDING * OutVoxelSize);
+    OutVoxelSize = Size / static_cast<float>(VoxelResolution);
     
-    // Generate padded density field
-    int32 VoxelCount = OutPaddedSize * OutPaddedSize * OutPaddedSize;
-    OutDensityField.SetNum(VoxelCount);
+    // Origin should be offset by one voxel to account for padding
+    OutPaddedOrigin = Position - FVector(Size * 0.5f) - FVector(OutVoxelSize);
     
-    for (int32 z = 0; z < OutPaddedSize; z++)
+    OutDensityField.SetNum(PaddedResolution * PaddedResolution * PaddedResolution);
+    
+    // Sample density field with padding
+    for (int32 z = 0; z < PaddedResolution; z++)
     {
-        for (int32 y = 0; y < OutPaddedSize; y++)
+        for (int32 y = 0; y < PaddedResolution; y++)
         {
-            for (int32 x = 0; x < OutPaddedSize; x++)
+            for (int32 x = 0; x < PaddedResolution; x++)
             {
-                FVector VoxelPos = OutPaddedOrigin + FVector(x, y, z) * OutVoxelSize;
-                int32 Index = x + y * OutPaddedSize + z * OutPaddedSize * OutPaddedSize;
-                OutDensityField[Index] = NoiseGenerator->SampleDensity(VoxelPos);
+                FVector WorldPos = OutPaddedOrigin + FVector(
+                    x * OutVoxelSize,
+                    y * OutVoxelSize,
+                    z * OutVoxelSize
+                );
+                
+                int32 Index = x + y * PaddedResolution + z * PaddedResolution * PaddedResolution;
+                OutDensityField[Index] = NoiseGenerator->SampleDensity(WorldPos);
             }
         }
     }
