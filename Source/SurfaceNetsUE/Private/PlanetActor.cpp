@@ -1,9 +1,11 @@
 #include "PlanetActor.h"
+#include "OctreeComponent.h"
+#include "NoiseGenerator.h"
 #include "PlanetChunk.h"
+#include "SurfaceNetsUE.h"
+#include "Components/SceneComponent.h"
+#include "ProceduralMeshComponent.h"
 #include "Engine/Engine.h"
-#include "Engine/World.h"
-#include "Camera/CameraComponent.h"
-#include "GameFramework/PlayerController.h"
 
 APlanetActor::APlanetActor()
 {
@@ -12,315 +14,226 @@ APlanetActor::APlanetActor()
     // Create root component
     RootSceneComponent = CreateDefaultSubobject<USceneComponent>(TEXT("RootSceneComponent"));
     RootComponent = RootSceneComponent;
-
+    
     // Create octree component
     OctreeComponent = CreateDefaultSubobject<UOctreeComponent>(TEXT("OctreeComponent"));
-
+    
     // Create noise generator
     NoiseGenerator = CreateDefaultSubobject<UNoiseGenerator>(TEXT("NoiseGenerator"));
-
-    LODUpdateTimer = 0.0f;
-
-    // Pre-create mesh components in the constructor (reduced from 50 to 30 for performance)
-    for (int32 i = 0; i < 30; i++)
-    {
-        UProceduralMeshComponent* MeshComp = CreateDefaultSubobject<UProceduralMeshComponent>(
-            *FString::Printf(TEXT("PlanetMesh_%d"), i)
-        );
-        MeshComp->SetupAttachment(RootComponent);
-        MeshComp->SetVisibility(false);
-        MeshComp->SetCollisionEnabled(ECollisionEnabled::NoCollision); // Disable collision for performance
-        MeshComponentPool.Add(MeshComp);
-    }
+    
+    // Initialize parameters
+    PlanetRadius = 1000.0f;
+    MaxMeshComponents = 100;
+    bEnableCollision = true;
+    MeshUpdateFrequency = 0.2f;
+    MeshUpdateTimer = 0.0f;
+    PlanetMaterial = nullptr;
 }
 
 void APlanetActor::BeginPlay()
 {
     Super::BeginPlay();
+    
+    // Initialize the planet
     InitializePlanet();
 }
 
 void APlanetActor::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
-
-    // Performance monitoring
-    if (bEnablePerformanceLogging)
-    {
-        LastFrameTime = DeltaTime * 1000.0f; // Convert to milliseconds
-    }
-
-    // Reset per-frame counters
-    ChunksGeneratedThisFrame = 0;
-
-    if (!bLODUpdatesEnabled)
-    {
-        return;
-    }
-
-    LODUpdateTimer += DeltaTime;
     
-    // Process pending chunks every frame but limit the number
-    ProcessPendingChunks();
-
-    // Only update LOD periodically or when camera moves significantly
-    if (LODUpdateTimer >= LODUpdateInterval)
+    MeshUpdateTimer += DeltaTime;
+    
+    if (MeshUpdateTimer >= MeshUpdateFrequency)
     {
-        LODUpdateTimer = 0.0f;
-
-        // Get camera position
-        if (APlayerController* PC = GetWorld()->GetFirstPlayerController())
-        {
-            FVector CameraLocation;
-            FRotator CameraRotation;
-            PC->GetPlayerViewPoint(CameraLocation, CameraRotation);
-            
-            if (ShouldUpdateLOD(CameraLocation))
-            {
-                UpdatePlanetLOD(CameraLocation);
-                LastCameraPosition = CameraLocation;
-            }
-        }
+        MeshUpdateTimer = 0.0f;
+        UpdatePlanetMeshes();
     }
-
-    // Performance logging
-    if (bEnablePerformanceLogging && GEngine)
-    {
-        FString DebugString = FString::Printf(
-            TEXT("Planet Performance: Frame: %.2fms | Active Chunks: %d | Pending: %d | Generated This Frame: %d"),
-            LastFrameTime,
-            ActiveChunkMeshes.Num(),
-            PendingChunks.IsEmpty() ? 0 : 1, // Approximation since TQueue doesn't have size
-            ChunksGeneratedThisFrame
-        );
-        GEngine->AddOnScreenDebugMessage(-1, 0.0f, FColor::Yellow, DebugString);
-    }
-}
-
-bool APlanetActor::ShouldUpdateLOD(const FVector& CameraPosition)
-{
-    // Check if camera has moved significantly
-    float MovementDistance = FVector::Dist(CameraPosition, LastCameraPosition);
-    return MovementDistance > MinCameraMovementForUpdate;
 }
 
 void APlanetActor::InitializePlanet()
 {
-    if (OctreeComponent && NoiseGenerator)
+    if (!OctreeComponent || !NoiseGenerator)
     {
-        OctreeComponent->InitializeOctree(GetActorLocation());
-        
-        // Set materials for pre-created mesh components
-        for (UProceduralMeshComponent* MeshComp : MeshComponentPool)
-        {
-            if (MeshComp && PlanetMaterial)
-            {
-                MeshComp->SetMaterial(0, PlanetMaterial);
-            }
-        }
-
-        // Clear any existing state
-        ActiveChunkMeshes.Empty();
-        while (!PendingChunks.IsEmpty())
-        {
-            TSharedPtr<FPlanetChunk> DummyChunk;
-            PendingChunks.Dequeue(DummyChunk);
-        }
-
-        UE_LOG(LogTemp, Log, TEXT("Planet initialized successfully"));
+        UE_LOG(LogSurfaceNets, Error, TEXT("Missing required components for planet initialization"));
+        return;
     }
-}
-
-void APlanetActor::SetLODUpdatesEnabled(bool bEnabled)
-{
-    bLODUpdatesEnabled = bEnabled;
     
-    if (!bEnabled)
+    // Set up noise generator with actor's world position as planet center
+    FVector ActorPosition = GetActorLocation();
+    NoiseGenerator->PlanetRadius = PlanetRadius;
+    NoiseGenerator->PlanetCenter = ActorPosition;
+    
+    // Set noise generator in octree
+    OctreeComponent->SetNoiseGenerator(NoiseGenerator);
+    
+    // Scale octree and LOD distances based on planet radius
+    OctreeComponent->RootSize = PlanetRadius * 2.5f; // Scale octree size with planet radius
+    
+    // Scale LOD distances based on planet radius
+    TArray<float> ScaledLODDistances;
+    float RadiusScale = PlanetRadius / 1000.0f; // Base scaling (1000.0f is the default radius)
+    ScaledLODDistances.Add(50.0f * RadiusScale);   // Close detail
+    ScaledLODDistances.Add(150.0f * RadiusScale);  // Medium detail
+    ScaledLODDistances.Add(400.0f * RadiusScale);  // Lower detail
+    ScaledLODDistances.Add(1000.0f * RadiusScale); // Distant detail
+    ScaledLODDistances.Add(2500.0f * RadiusScale); // Very distant
+    OctreeComponent->LODDistances = ScaledLODDistances;
+    
+    // Initialize octree at actor's position
+    OctreeComponent->InitializeOctree(ActorPosition);
+    
+    // Pre-create some mesh components
+    for (int32 i = 0; i < FMath::Min(MaxMeshComponents / 4, 25); i++)
     {
-        // Clear pending work when disabling
-        while (!PendingChunks.IsEmpty())
-        {
-            TSharedPtr<FPlanetChunk> DummyChunk;
-            PendingChunks.Dequeue(DummyChunk);
-        }
+        UProceduralMeshComponent* MeshComp = CreateMeshComponent();
+        AvailableMeshComponents.Add(MeshComp);
     }
+    
+    UE_LOG(LogSurfaceNets, Log, TEXT("Planet initialized at %s with radius %f, scaled LOD distances"), *ActorPosition.ToString(), PlanetRadius);
 }
 
-void APlanetActor::UpdatePlanetLOD(const FVector& CameraPosition)
+void APlanetActor::UpdatePlanetMeshes()
 {
     if (!OctreeComponent)
     {
         return;
     }
-
-    // Update octree LOD
-    OctreeComponent->UpdateLOD(CameraPosition);
-
-    // Update chunk meshes
-    UpdateChunkMeshes();
-}
-
-void APlanetActor::UpdateChunkMeshes()
-{
-    if (!OctreeComponent)
-    {
-        return;
-    }
-
-    // Get active chunks as shared pointers
-    TArray<TSharedPtr<FPlanetChunk>> ActiveChunkPtrs = OctreeComponent->GetActiveChunks();
     
-    // Limit the number of active chunks for performance
-    if (ActiveChunkPtrs.Num() > MaxActiveChunks)
-    {
-        // Sort by distance and keep only the closest ones
-        ActiveChunkPtrs.Sort([](const TSharedPtr<FPlanetChunk>& A, const TSharedPtr<FPlanetChunk>& B) {
-            return A->DistanceFromCamera < B->DistanceFromCamera;
-        });
-        ActiveChunkPtrs.SetNum(MaxActiveChunks);
-    }
+    // Get visible chunks from octree
+    TArray<FPlanetChunk*> VisibleChunks;
+    OctreeComponent->GetVisibleChunks(VisibleChunks);
     
-    // Convert to raw pointers for the mesh mapping
-    TArray<FPlanetChunk*> ActiveChunks;
-    TSet<FPlanetChunk*> NewActiveChunks;
+    // Clear all currently used mesh components
+    ClearUnusedMeshComponents();
     
-    for (const auto& ChunkPtr : ActiveChunkPtrs)
+    // Update meshes for visible chunks
+    for (FPlanetChunk* Chunk : VisibleChunks)
     {
-        if (ChunkPtr.IsValid())
+        if (Chunk && Chunk->bIsGenerated && Chunk->Vertices.Num() > 0)
         {
-            FPlanetChunk* Chunk = ChunkPtr.Get();
-            ActiveChunks.Add(Chunk);
-            NewActiveChunks.Add(Chunk);
-        }
-    }
-
-    // Remove meshes for chunks that are no longer active
-    TArray<FPlanetChunk*> ChunksToRemove;
-    for (auto& Pair : ActiveChunkMeshes)
-    {
-        if (!NewActiveChunks.Contains(Pair.Key))
-        {
-            ChunksToRemove.Add(Pair.Key);
-            ReturnMeshToPool(Pair.Value);
-        }
-    }
-
-    for (auto& ChunkToRemove : ChunksToRemove)
-    {
-        ActiveChunkMeshes.Remove(ChunkToRemove);
-    }
-
-    // Add new chunks to pending queue instead of processing immediately
-    for (auto& Chunk : ActiveChunks)
-    {
-        if (!ActiveChunkMeshes.Contains(Chunk))
-        {
-            // Find the shared pointer for this chunk
-            for (const auto& ChunkPtr : ActiveChunkPtrs)
+            UProceduralMeshComponent* MeshComp = GetMeshComponent();
+            if (MeshComp)
             {
-                if (ChunkPtr.Get() == Chunk)
-                {
-                    PendingChunks.Enqueue(ChunkPtr);
-                    break;
-                }
+                UpdateChunkMesh(Chunk, MeshComp);
+                UsedMeshComponents.Add(MeshComp);
             }
         }
     }
-}
-
-void APlanetActor::ProcessPendingChunks()
-{
-    int32 ProcessedThisFrame = 0;
     
-    while (!PendingChunks.IsEmpty() && ProcessedThisFrame < MaxChunksPerFrame)
-    {
-        TSharedPtr<FPlanetChunk> ChunkPtr;
-        PendingChunks.Dequeue(ChunkPtr);
-        
-        if (!ChunkPtr.IsValid())
-        {
-            continue;
-        }
-        
-        FPlanetChunk* Chunk = ChunkPtr.Get();
-        
-        // Check if this chunk is still needed
-        if (ActiveChunkMeshes.Contains(Chunk))
-        {
-            continue;
-        }
-        
-        UProceduralMeshComponent* MeshComponent = GetMeshFromPool();
-        if (MeshComponent)
-        {
-            ActiveChunkMeshes.Add(Chunk, MeshComponent);
-            GenerateChunkMesh(Chunk, MeshComponent);
-            ProcessedThisFrame++;
-            ChunksGeneratedThisFrame++;
-        }
-        else
-        {
-            // No available mesh components, put chunk back in queue
-            PendingChunks.Enqueue(ChunkPtr);
-            break;
-        }
-    }
+    UE_LOG(LogSurfaceNets, Verbose, TEXT("Updated %d chunk meshes"), VisibleChunks.Num());
 }
 
-UProceduralMeshComponent* APlanetActor::GetMeshFromPool()
+UProceduralMeshComponent* APlanetActor::GetMeshComponent()
 {
-    // Find an available mesh component from the pre-created pool
-    for (UProceduralMeshComponent* MeshComp : MeshComponentPool)
+    // Try to get from available pool
+    if (AvailableMeshComponents.Num() > 0)
     {
-        if (MeshComp && !MeshComp->IsVisible())
-        {
-            MeshComp->SetVisibility(true);
-            return MeshComp;
-        }
+        UProceduralMeshComponent* MeshComp = AvailableMeshComponents.Pop();
+        return MeshComp;
     }
-
-    // If no available mesh component, we've run out of pool
-    if (bEnablePerformanceLogging)
+    
+    // Create new one if pool is empty and we haven't hit the limit
+    if (MeshComponents.Num() < MaxMeshComponents)
     {
-        UE_LOG(LogTemp, Warning, TEXT("APlanetActor: Ran out of mesh components in pool. Consider increasing pool size."));
+        return CreateMeshComponent();
     }
+    
+    // No components available
     return nullptr;
 }
 
-void APlanetActor::ReturnMeshToPool(UProceduralMeshComponent* MeshComponent)
+void APlanetActor::ReturnMeshComponent(UProceduralMeshComponent* MeshComponent)
 {
     if (MeshComponent)
     {
+        // Clear the mesh and hide it
         MeshComponent->ClearAllMeshSections();
         MeshComponent->SetVisibility(false);
+        
+        // Return to available pool
+        AvailableMeshComponents.AddUnique(MeshComponent);
+        UsedMeshComponents.Remove(MeshComponent);
     }
 }
 
-void APlanetActor::GenerateChunkMesh(FPlanetChunk* Chunk, UProceduralMeshComponent* MeshComponent)
+UProceduralMeshComponent* APlanetActor::CreateMeshComponent()
 {
-    if (!Chunk || !MeshComponent || !NoiseGenerator)
+    FString CompName = FString::Printf(TEXT("PlanetMesh_%d"), MeshComponents.Num());
+    UProceduralMeshComponent* MeshComp = NewObject<UProceduralMeshComponent>(this, *CompName);
+    
+    if (MeshComp)
+    {
+        // Register the component with the actor
+        MeshComp->RegisterComponent();
+        
+        // Attach to root component
+        MeshComp->AttachToComponent(RootComponent, FAttachmentTransformRules::KeepRelativeTransform);
+        
+        // Set material if available
+        if (PlanetMaterial)
+        {
+            MeshComp->SetMaterial(0, PlanetMaterial);
+        }
+        
+        // Configure collision
+        if (bEnableCollision)
+        {
+            MeshComp->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+            MeshComp->SetCollisionObjectType(ECollisionChannel::ECC_WorldStatic);
+        }
+        else
+        {
+            MeshComp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        }
+        
+        MeshComponents.Add(MeshComp);
+    }
+    
+    return MeshComp;
+}
+
+void APlanetActor::UpdateChunkMesh(FPlanetChunk* Chunk, UProceduralMeshComponent* MeshComponent)
+{
+    if (!Chunk || !MeshComponent || !Chunk->bIsGenerated)
     {
         return;
     }
-
-    // Generate mesh if not already generated
-    if (!Chunk->bIsGenerated && !Chunk->bIsGenerating)
-    {
-        Chunk->GenerateMesh(NoiseGenerator);
-    }
-
-    // Create mesh section
+    
+    // Clear existing mesh sections
+    MeshComponent->ClearAllMeshSections();
+    
+    // Create mesh section with chunk data
     if (Chunk->Vertices.Num() > 0 && Chunk->Triangles.Num() > 0)
     {
-        MeshComponent->CreateMeshSection(
-            0,
-            Chunk->Vertices,
-            Chunk->Triangles,
-            Chunk->Normals,
-            Chunk->UVs,
-            TArray<FColor>(),
-            TArray<FProcMeshTangent>(),
-            false // Disable collision for performance
+        TArray<FLinearColor> VertexColors; // Empty for now
+        TArray<FProcMeshTangent> Tangents;  // Empty for now
+        
+        MeshComponent->CreateMeshSection_LinearColor(
+            0,                          // Section index
+            Chunk->Vertices,           // Vertices
+            Chunk->Triangles,          // Triangles
+            Chunk->Normals,            // Normals
+            Chunk->UVs,                // UVs
+            VertexColors,              // Vertex colors
+            Tangents,                  // Tangents
+            bEnableCollision           // Create collision
         );
+        
+        // Set world position
+        FVector ChunkWorldPos = Chunk->Position;
+        MeshComponent->SetWorldLocation(ChunkWorldPos);
+        MeshComponent->SetVisibility(true);
     }
+}
+
+void APlanetActor::ClearUnusedMeshComponents()
+{
+    // Return all currently used mesh components to the pool
+    for (UProceduralMeshComponent* MeshComp : UsedMeshComponents)
+    {
+        ReturnMeshComponent(MeshComp);
+    }
+    
+    UsedMeshComponents.Empty();
 }

@@ -1,13 +1,12 @@
 #include "PlanetChunk.h"
 #include "NoiseGenerator.h"
 #include "SurfaceNets.h"
-#include "SurfaceNetsUE.h"
 
 FPlanetChunk::FPlanetChunk()
     : Position(FVector::ZeroVector)
     , LODLevel(0)
-    , Size(1000.0f)
-    , VoxelResolution(BASE_VOXEL_RESOLUTION)
+    , Size(64.0f)
+    , VoxelResolution(16)
     , bIsGenerated(false)
     , bIsGenerating(false)
     , DistanceFromCamera(0.0f)
@@ -25,69 +24,122 @@ FPlanetChunk::FPlanetChunk(const FVector& InPosition, int32 InLODLevel, float In
 {
 }
 
-int32 FPlanetChunk::GetVoxelResolution() const
-{
-    // Higher LOD levels have lower resolution
-    // LOD 0 = BASE_VOXEL_RESOLUTION, LOD 1 = BASE_VOXEL_RESOLUTION/2, etc.
-    int32 Divisor = FMath::RoundToInt(FMath::Pow(2.0f, static_cast<float>(LODLevel)));
-    return FMath::Max(8, BASE_VOXEL_RESOLUTION / Divisor);
-}
-
-int32 FPlanetChunk::GetPaddedVoxelResolution() const
-{
-    return GetVoxelResolution() + (CHUNK_PADDING * 2);
-}
-
-bool FPlanetChunk::ShouldSubdivide(float CameraDistance, float SubdivisionDistance) const
-{
-    return CameraDistance < SubdivisionDistance && LODLevel < 8; // Max 8 LOD levels
-}
-
-bool FPlanetChunk::ShouldMerge(float CameraDistance, float MergeDistance) const
-{
-    return CameraDistance > MergeDistance && LODLevel > 0; // Min LOD level 0
-}
-
 void FPlanetChunk::GenerateMesh(const UNoiseGenerator* NoiseGenerator)
 {
-    if (!NoiseGenerator || bIsGenerating)
+    if (bIsGenerating || bIsGenerated || !NoiseGenerator)
     {
         return;
     }
-
+    
     bIsGenerating = true;
+    
+    // Clear previous data
     ClearMesh();
-
-    // Generate density field with padding
-    TArray<float> DensityField;
+    
+    // Generate padded density field for seamless chunk boundaries
+    TArray<float> PaddedDensityField;
     int32 PaddedSize;
     FVector PaddedOrigin;
     float VoxelSize;
     
-    GeneratePaddedDensityField(NoiseGenerator, DensityField, PaddedSize, PaddedOrigin, VoxelSize);
-
-    // Generate mesh using Surface Nets
+    GeneratePaddedDensityField(NoiseGenerator, PaddedDensityField, PaddedSize, PaddedOrigin, VoxelSize);
+    
+    // Generate mesh using Surface Nets on padded data
     FSurfaceNets SurfaceNets;
-    SurfaceNets.GenerateMesh(
-        DensityField,
-        PaddedSize,
-        VoxelSize,
-        PaddedOrigin,
-        Vertices,
-        Triangles,
-        Normals
-    );
-
-    // Generate UVs (simple planar mapping for now)
+    TArray<FVector> PaddedVertices;
+    TArray<int32> PaddedTriangles;
+    TArray<FVector> PaddedNormals;
+    
+    SurfaceNets.GenerateMesh(PaddedDensityField, PaddedSize, VoxelSize, PaddedOrigin, 
+                           PaddedVertices, PaddedTriangles, PaddedNormals);
+    
+    // Filter vertices and triangles to only include those within the actual chunk bounds
+    // (excluding padding area)
+    FVector ChunkMin = Position - FVector(Size * 0.5f);
+    FVector ChunkMax = Position + FVector(Size * 0.5f);
+    
+    TMap<int32, int32> VertexRemapping;
+    
+    // Filter vertices that are within chunk bounds
+    for (int32 i = 0; i < PaddedVertices.Num(); i++)
+    {
+        const FVector& Vertex = PaddedVertices[i];
+        
+        // Check if vertex is within chunk bounds (with small tolerance for boundary vertices)
+        if (Vertex.X >= ChunkMin.X - VoxelSize * 0.1f && Vertex.X <= ChunkMax.X + VoxelSize * 0.1f &&
+            Vertex.Y >= ChunkMin.Y - VoxelSize * 0.1f && Vertex.Y <= ChunkMax.Y + VoxelSize * 0.1f &&
+            Vertex.Z >= ChunkMin.Z - VoxelSize * 0.1f && Vertex.Z <= ChunkMax.Z + VoxelSize * 0.1f)
+        {
+            int32 NewIndex = Vertices.Num();
+            VertexRemapping.Add(i, NewIndex);
+            Vertices.Add(Vertex);
+            Normals.Add(PaddedNormals[i]);
+        }
+    }
+    
+    // Filter triangles that reference valid vertices
+    for (int32 i = 0; i < PaddedTriangles.Num(); i += 3)
+    {
+        int32 V1 = PaddedTriangles[i];
+        int32 V2 = PaddedTriangles[i + 1];
+        int32 V3 = PaddedTriangles[i + 2];
+        
+        int32* NewV1 = VertexRemapping.Find(V1);
+        int32* NewV2 = VertexRemapping.Find(V2);
+        int32* NewV3 = VertexRemapping.Find(V3);
+        
+        if (NewV1 && NewV2 && NewV3)
+        {
+            Triangles.Add(*NewV1);
+            Triangles.Add(*NewV2);
+            Triangles.Add(*NewV3);
+        }
+    }
+    
+    // Generate UVs
     UVs.SetNum(Vertices.Num());
     for (int32 i = 0; i < Vertices.Num(); i++)
     {
-        FVector LocalPos = (Vertices[i] - Position) / Size;
-        UVs[i] = FVector2D(LocalPos.X + 0.5f, LocalPos.Y + 0.5f);
+        FVector LocalPos = (Vertices[i] - ChunkMin) / Size;
+        UVs[i] = FVector2D(LocalPos.X, LocalPos.Y);
     }
-
+    
     bIsGenerated = true;
     bIsGenerating = false;
+}
+
+void FPlanetChunk::GeneratePaddedDensityField(
+    const UNoiseGenerator* NoiseGenerator,
+    TArray<float>& OutDensityField,
+    int32& OutPaddedSize,
+    FVector& OutPaddedOrigin,
+    float& OutVoxelSize)
+{
+    // Calculate padded dimensions
+    int32 BaseResolution = VoxelResolution;
+    OutPaddedSize = BaseResolution + 2 * CHUNK_PADDING + 1; // +1 for Surface Nets grid
+    OutVoxelSize = Size / BaseResolution;
+    
+    // Calculate padded origin (extends beyond chunk boundaries)
+    FVector ChunkOrigin = Position - FVector(Size * 0.5f);
+    OutPaddedOrigin = ChunkOrigin - FVector(CHUNK_PADDING * OutVoxelSize);
+    
+    // Generate padded density field
+    int32 VoxelCount = OutPaddedSize * OutPaddedSize * OutPaddedSize;
+    OutDensityField.SetNum(VoxelCount);
+    
+    for (int32 z = 0; z < OutPaddedSize; z++)
+    {
+        for (int32 y = 0; y < OutPaddedSize; y++)
+        {
+            for (int32 x = 0; x < OutPaddedSize; x++)
+            {
+                FVector VoxelPos = OutPaddedOrigin + FVector(x, y, z) * OutVoxelSize;
+                int32 Index = x + y * OutPaddedSize + z * OutPaddedSize * OutPaddedSize;
+                OutDensityField[Index] = NoiseGenerator->SampleDensity(VoxelPos);
+            }
+        }
+    }
 }
 
 void FPlanetChunk::ClearMesh()
@@ -99,36 +151,31 @@ void FPlanetChunk::ClearMesh()
     bIsGenerated = false;
 }
 
-void FPlanetChunk::GeneratePaddedDensityField(
-    const UNoiseGenerator* NoiseGenerator,
-    TArray<float>& OutDensityField,
-    int32& OutPaddedSize,
-    FVector& OutPaddedOrigin,
-    float& OutVoxelSize)
+int32 FPlanetChunk::GetVoxelResolution() const
 {
-    int32 Resolution = GetVoxelResolution();
-    OutPaddedSize = Resolution + (CHUNK_PADDING * 2);
-    
-    OutVoxelSize = Size / static_cast<float>(Resolution);
-    OutPaddedOrigin = Position - FVector(Size * 0.5f) - FVector(OutVoxelSize * static_cast<float>(CHUNK_PADDING));
-    
-    // Allocate density field
-    int32 TotalVoxels = OutPaddedSize * OutPaddedSize * OutPaddedSize;
-    OutDensityField.SetNum(TotalVoxels);
-    
-    // Sample density field
-    for (int32 z = 0; z < OutPaddedSize; z++)
+    // Adjust voxel resolution based on LOD level
+    switch (LODLevel)
     {
-        for (int32 y = 0; y < OutPaddedSize; y++)
-        {
-            for (int32 x = 0; x < OutPaddedSize; x++)
-            {
-                FVector WorldPos = OutPaddedOrigin + FVector(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)) * OutVoxelSize;
-                float Density = NoiseGenerator->SampleDensity(WorldPos);
-                
-                int32 Index = x + y * OutPaddedSize + z * OutPaddedSize * OutPaddedSize;
-                OutDensityField[Index] = Density;
-            }
-        }
+        case 0: return 32;  // Highest detail
+        case 1: return 24;  // Good detail
+        case 2: return 16;  // Medium detail
+        case 3: return 12;  // Lower detail
+        case 4: return 8;   // Low detail
+        default: return 6;  // Lowest detail
     }
+}
+
+int32 FPlanetChunk::GetPaddedVoxelResolution() const
+{
+    return GetVoxelResolution() + 2 * CHUNK_PADDING + 1;
+}
+
+bool FPlanetChunk::ShouldSubdivide(float CameraDistance, float SubdivisionDistance) const
+{
+    return CameraDistance < SubdivisionDistance && LODLevel < 5;
+}
+
+bool FPlanetChunk::ShouldMerge(float CameraDistance, float MergeDistance) const
+{
+    return CameraDistance > MergeDistance * 1.5f; // Hysteresis to prevent flickering
 }
