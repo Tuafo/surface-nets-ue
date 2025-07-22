@@ -39,14 +39,8 @@ private:
         const FIntVector& P2,
         const FIntVector& AxisB,
         const FIntVector& AxisC,
-        TArray<int32>& OutTriangles
-    );
-
-    void CreateQuadBetweenCubes(
-        const FIntVector& Cube1,
-        const FIntVector& Cube2,
-        const TMap<FIntVector, int32>& VertexMap,
-        TArray<int32>& OutTriangles
+        TArray<int32>& OutTriangles,
+        const TArray<FVector>& Vertices
     );
     
     /** Calculate vertex position using Surface Nets smoothing (equivalent to estimate_surface in Rust) */
@@ -71,12 +65,21 @@ private:
     /** Check if a cube contains the surface (density changes sign) */
     bool ContainsSurface(const TArray<float>& DensityField, int32 GridSize, int32 x, int32 y, int32 z);
     
-    /** Get vertex index for a cube, creating if necessary */
-    int32 GetOrCreateVertex(int32 x, int32 y, int32 z, TMap<FIntVector, int32>& VertexMap);
-    
     /** Get vertex index from vertex grid */
     int32 GetVertexIndex(const TArray<int32>& VertexGrid, int32 GridSize, int32 x, int32 y, int32 z);
     
-    /** Cube face directions for mesh generation */
-    static const FIntVector CubeFaces[6][4];
+    /** Calculate centroid of edge intersections for vertex positioning */
+    FVector CalculateCentroidOfEdgeIntersections(const float CornerDists[8]);
+    
+    /** Estimate surface edge intersection point */
+    FVector EstimateSurfaceEdgeIntersection(int32 Corner1, int32 Corner2, float Value1, float Value2);
+    
+    /** Cube corner offsets */
+    static const FIntVector CubeCorners[8];
+    
+    /** Cube corner vectors */
+    static const FVector CubeCornerVectors[8];
+    
+    /** Cube edges */
+    static const int32 CubeEdges[12][2];
 };
