@@ -18,10 +18,12 @@ void UOctreeComponent::InitializeOctree(const FVector& InWorldCenter)
     WorldCenter = InWorldCenter;
     ClearOctree();
 
-    // Create root nodes - we'll create a single root for now
+    // Create root node
     FOctreeKey RootKey(MaxDepth, FIntVector::ZeroValue);
     int32 RootIndex = CreateNode(RootKey, WorldCenter, RootSize);
     RootIndices.Add(RootIndex);
+
+    UE_LOG(LogTemp, Log, TEXT("Initialized octree with root size: %f"), RootSize);
 }
 
 void UOctreeComponent::ClearOctree()
@@ -35,12 +37,10 @@ int32 UOctreeComponent::CreateNode(const FOctreeKey& Key, const FVector& Center,
 {
     int32 NodeIndex = Nodes.Num();
     
-    FOctreeNode& NewNode = Nodes.AddDefaulted_GetRef();
-    NewNode.Key = Key;
-    NewNode.Center = Center;
-    NewNode.Size = Size;
+    FOctreeNode NewNode(Key, Center, Size);
     NewNode.ParentIndex = ParentIndex;
     
+    Nodes.Add(NewNode);
     KeyToNodeIndex.Add(Key, NodeIndex);
     
     return NodeIndex;
@@ -48,13 +48,20 @@ int32 UOctreeComponent::CreateNode(const FOctreeKey& Key, const FVector& Center,
 
 void UOctreeComponent::UpdateLOD(const FVector& CameraPosition)
 {
-    if (RootIndices.IsEmpty())
+    if (RootIndices.Num() == 0)
     {
         return;
     }
 
-    // Process all nodes starting from roots
+    // Use a two-pass approach to avoid array reallocation issues
+    // First pass: collect nodes that need subdivision/merging
+    TArray<int32> NodesToSubdivide;
+    TArray<int32> NodesToMerge;
+    
+    // Process nodes breadth-first to determine what operations are needed
     TQueue<int32> NodesToProcess;
+    
+    // Start with root nodes
     for (int32 RootIndex : RootIndices)
     {
         NodesToProcess.Enqueue(RootIndex);
@@ -64,30 +71,31 @@ void UOctreeComponent::UpdateLOD(const FVector& CameraPosition)
     {
         int32 NodeIndex;
         NodesToProcess.Dequeue(NodeIndex);
-        
+
         if (!Nodes.IsValidIndex(NodeIndex))
         {
             continue;
         }
 
         FOctreeNode& Node = Nodes[NodeIndex];
-        Node.DistanceFromCamera = FVector::Dist(CameraPosition, Node.Center);
+        
+        // Update distance
+        Node.DistanceFromCamera = FVector::Dist(Node.Center, CameraPosition);
 
+        // Check operations needed
         bool bShouldSubdivide = ShouldSubdivide(Node, CameraPosition);
         bool bShouldMerge = ShouldMerge(Node, CameraPosition);
 
         if (bShouldSubdivide && !Node.bHasChildren && Node.Key.Level > 0)
         {
-            SubdivideNode(NodeIndex);
+            NodesToSubdivide.Add(NodeIndex);
         }
         else if (bShouldMerge && Node.bHasChildren)
         {
-            MergeNode(NodeIndex);
+            NodesToMerge.Add(NodeIndex);
         }
 
-        // Update activity and process children
-        UpdateNodeActivity(NodeIndex, CameraPosition);
-
+        // Add children to processing queue
         if (Node.bHasChildren)
         {
             for (int32 ChildIndex : Node.ChildIndices)
@@ -95,6 +103,49 @@ void UOctreeComponent::UpdateLOD(const FVector& CameraPosition)
                 if (ChildIndex != -1)
                 {
                     NodesToProcess.Enqueue(ChildIndex);
+                }
+            }
+        }
+    }
+
+    // Second pass: perform operations (subdivisions first, then merges)
+    for (int32 NodeIndex : NodesToSubdivide)
+    {
+        SubdivideNode(NodeIndex);
+    }
+
+    for (int32 NodeIndex : NodesToMerge)
+    {
+        MergeNode(NodeIndex);
+    }
+
+    // Third pass: update node activity (safe to do after all structural changes)
+    TQueue<int32> ActivityUpdateQueue;
+    for (int32 RootIndex : RootIndices)
+    {
+        ActivityUpdateQueue.Enqueue(RootIndex);
+    }
+
+    while (!ActivityUpdateQueue.IsEmpty())
+    {
+        int32 NodeIndex;
+        ActivityUpdateQueue.Dequeue(NodeIndex);
+
+        if (!Nodes.IsValidIndex(NodeIndex))
+        {
+            continue;
+        }
+
+        UpdateNodeActivity(NodeIndex, CameraPosition);
+
+        const FOctreeNode& Node = Nodes[NodeIndex];
+        if (Node.bHasChildren)
+        {
+            for (int32 ChildIndex : Node.ChildIndices)
+            {
+                if (ChildIndex != -1)
+                {
+                    ActivityUpdateQueue.Enqueue(ChildIndex);
                 }
             }
         }
@@ -108,15 +159,20 @@ void UOctreeComponent::SubdivideNode(int32 NodeIndex)
         return;
     }
 
-    FOctreeNode& Node = Nodes[NodeIndex];
-    if (Node.bHasChildren || Node.Key.Level <= 0)
+    // Make a copy of the node data to avoid reference invalidation
+    FOctreeNode NodeCopy = Nodes[NodeIndex];
+    
+    if (NodeCopy.bHasChildren || NodeCopy.Key.Level <= 0)
     {
         return;
     }
 
     // Create 8 child nodes
-    TArray<FOctreeKey> ChildKeys = Node.Key.GetChildren();
-    float ChildSize = Node.Size * 0.5f;
+    TArray<FOctreeKey> ChildKeys = NodeCopy.Key.GetChildren();
+    float ChildSize = NodeCopy.Size * 0.5f;
+
+    TArray<int32> NewChildIndices;
+    NewChildIndices.Reserve(8);
 
     for (int32 i = 0; i < 8; i++)
     {
@@ -128,14 +184,23 @@ void UOctreeComponent::SubdivideNode(int32 NodeIndex)
             (i & 2) ? ChildSize * 0.5f : -ChildSize * 0.5f,
             (i & 4) ? ChildSize * 0.5f : -ChildSize * 0.5f
         );
-        FVector ChildCenter = Node.Center + ChildOffset;
+        FVector ChildCenter = NodeCopy.Center + ChildOffset;
 
         int32 ChildIndex = CreateNode(ChildKey, ChildCenter, ChildSize, NodeIndex);
-        Node.ChildIndices[i] = ChildIndex;
+        NewChildIndices.Add(ChildIndex);
     }
 
-    Node.bHasChildren = true;
-    Node.bIsActive = false; // Parent becomes inactive when subdivided
+    // Now safely update the original node (reacquire reference after potential reallocation)
+    if (Nodes.IsValidIndex(NodeIndex))
+    {
+        FOctreeNode& Node = Nodes[NodeIndex];
+        for (int32 i = 0; i < 8; i++)
+        {
+            Node.ChildIndices[i] = NewChildIndices[i];
+        }
+        Node.bHasChildren = true;
+        Node.bIsActive = false; // Parent becomes inactive when subdivided
+    }
 }
 
 void UOctreeComponent::MergeNode(int32 NodeIndex)
@@ -151,51 +216,31 @@ void UOctreeComponent::MergeNode(int32 NodeIndex)
         return;
     }
 
-    // Remove all children and their descendants
-    TQueue<int32> NodesToRemove;
+    // Remove child nodes (but don't actually remove from array to avoid index shifting)
     for (int32 ChildIndex : Node.ChildIndices)
     {
-        if (ChildIndex != -1)
+        if (ChildIndex != -1 && Nodes.IsValidIndex(ChildIndex))
         {
-            NodesToRemove.Enqueue(ChildIndex);
-        }
-    }
-
-    while (!NodesToRemove.IsEmpty())
-    {
-        int32 IndexToRemove;
-        NodesToRemove.Dequeue(IndexToRemove);
-        
-        if (!Nodes.IsValidIndex(IndexToRemove))
-        {
-            continue;
-        }
-
-        FOctreeNode& NodeToRemove = Nodes[IndexToRemove];
-        
-        // Add children to removal queue
-        if (NodeToRemove.bHasChildren)
-        {
-            for (int32 GrandChildIndex : NodeToRemove.ChildIndices)
+            FOctreeNode& ChildNode = Nodes[ChildIndex];
+            
+            // Recursively merge children if they have children
+            if (ChildNode.bHasChildren)
             {
-                if (GrandChildIndex != -1)
-                {
-                    NodesToRemove.Enqueue(GrandChildIndex);
-                }
+                MergeNode(ChildIndex);
             }
+            
+            // Remove from key mapping
+            KeyToNodeIndex.Remove(ChildNode.Key);
+            
+            // Mark the child node as invalid (clear it)
+            Nodes[ChildIndex] = FOctreeNode();
         }
-
-        // Remove from key map
-        KeyToNodeIndex.Remove(NodeToRemove.Key);
-        
-        // Clear the node (we keep the array to avoid index shifting)
-        NodeToRemove = FOctreeNode();
     }
 
     // Reset parent node
-    Node.bHasChildren = false;
-    Node.bIsActive = true;
     Node.ChildIndices.Init(-1, 8);
+    Node.bHasChildren = false;
+    Node.bIsActive = true; // Parent becomes active when merged
 }
 
 bool UOctreeComponent::ShouldSubdivide(const FOctreeNode& Node, const FVector& CameraPosition) const
@@ -263,6 +308,7 @@ TSharedPtr<FPlanetChunk> UOctreeComponent::GetOrCreateChunk(FOctreeNode& Node)
     NewChunk->VoxelResolution = NewChunk->GetVoxelResolution();
     NewChunk->DistanceFromCamera = Node.DistanceFromCamera;
 
+    Node.Chunk = NewChunk; // Store the chunk in the node
     return NewChunk;
 }
 
@@ -289,17 +335,47 @@ FVector UOctreeComponent::GetWorldPosition(const FOctreeKey& Key, float NodeSize
     return WorldCenter + Offset;
 }
 
-TArray<FPlanetChunk*> UOctreeComponent::GetActiveChunks() const
+// Updated function - returns shared pointers instead of raw pointers (C++ only)
+TArray<TSharedPtr<FPlanetChunk>> UOctreeComponent::GetActiveChunks() const
 {
-    TArray<FPlanetChunk*> ActiveChunks;
+    TArray<TSharedPtr<FPlanetChunk>> ActiveChunks;
     
     for (const FOctreeNode& Node : Nodes)
     {
         if (Node.bIsActive && Node.Chunk.IsValid())
         {
-            ActiveChunks.Add(Node.Chunk.Get());
+            ActiveChunks.Add(Node.Chunk);
         }
     }
     
     return ActiveChunks;
+}
+
+// New Blueprint-accessible functions
+int32 UOctreeComponent::GetActiveChunkCount() const
+{
+    int32 Count = 0;
+    for (const FOctreeNode& Node : Nodes)
+    {
+        if (Node.bIsActive && Node.Chunk.IsValid())
+        {
+            Count++;
+        }
+    }
+    return Count;
+}
+
+TArray<FVector> UOctreeComponent::GetActiveChunkPositions() const
+{
+    TArray<FVector> Positions;
+    
+    for (const FOctreeNode& Node : Nodes)
+    {
+        if (Node.bIsActive && Node.Chunk.IsValid())
+        {
+            Positions.Add(Node.Chunk->Position);
+        }
+    }
+    
+    return Positions;
 }

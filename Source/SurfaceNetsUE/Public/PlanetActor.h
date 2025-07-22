@@ -43,15 +43,37 @@ protected:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet")
     UMaterialInterface* PlanetMaterial;
 
-    /** How often to update LOD (in seconds) */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet")
-    float LODUpdateInterval = 0.1f;
+    /** How often to update LOD (in seconds) - INCREASED for performance */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet", meta = (ClampMin = "0.1", ClampMax = "2.0"))
+    float LODUpdateInterval = 0.5f;
+
+    /** Maximum number of chunks that can be active at once */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Performance", meta = (ClampMin = "10", ClampMax = "200"))
+    int32 MaxActiveChunks = 50;
+
+    /** Maximum number of new chunks to generate per frame */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Performance", meta = (ClampMin = "1", ClampMax = "10"))
+    int32 MaxChunksPerFrame = 3;
+
+    /** Enable performance monitoring */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Debug")
+    bool bEnablePerformanceLogging = false;
 
     /** Timer for LOD updates */
     float LODUpdateTimer = 0.0f;
 
     /** Currently active chunk-to-mesh mappings */
     TMap<FPlanetChunk*, UProceduralMeshComponent*> ActiveChunkMeshes;
+
+    /** Chunks waiting to be processed */
+    TQueue<TSharedPtr<FPlanetChunk>> PendingChunks;
+
+    /** Last camera position for movement detection */
+    FVector LastCameraPosition = FVector::ZeroVector;
+
+    /** Minimum camera movement distance to trigger LOD update */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Performance")
+    float MinCameraMovementForUpdate = 100.0f;
 
 public:
     /** Update planet LOD based on camera position */
@@ -61,6 +83,10 @@ public:
     /** Initialize the planet */
     UFUNCTION(BlueprintCallable, Category = "Planet")
     void InitializePlanet();
+
+    /** Enable/disable planet LOD updates */
+    UFUNCTION(BlueprintCallable, Category = "Planet")
+    void SetLODUpdatesEnabled(bool bEnabled);
 
 protected:
     /** Get or create a mesh component from the pool */
@@ -74,4 +100,18 @@ protected:
 
     /** Generate mesh for a chunk */
     void GenerateChunkMesh(FPlanetChunk* Chunk, UProceduralMeshComponent* MeshComponent);
+
+    /** Process pending chunks gradually */
+    void ProcessPendingChunks();
+
+    /** Check if we should update LOD based on camera movement */
+    bool ShouldUpdateLOD(const FVector& CameraPosition);
+
+private:
+    /** Whether LOD updates are enabled */
+    bool bLODUpdatesEnabled = true;
+
+    /** Performance tracking */
+    float LastFrameTime = 0.0f;
+    int32 ChunksGeneratedThisFrame = 0;
 };

@@ -120,27 +120,34 @@ public:
 
     /** Maximum depth of the octree */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Octree LOD")
-    int32 MaxDepth = 8;
+    int32 MaxDepth = 5;
 
     /** Size of the root octree node */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Octree LOD")
-    float RootSize = 4096.0f;
+    float RootSize = 2048.0f;
 
     /** Distance at which nodes should subdivide */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Octree LOD")
-    float SubdivisionDistance = 1000.0f;
+    float SubdivisionDistance = 500.0f; 
 
     /** Multiplier for merge distance (merge at SubdivisionDistance * MergeDistanceMultiplier) */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Octree LOD")
-    float MergeDistanceMultiplier = 2.0f;
+    float MergeDistanceMultiplier = 3.0f;
 
     /** Update LOD based on camera position */
     UFUNCTION(BlueprintCallable, Category = "Octree LOD")
     void UpdateLOD(const FVector& CameraPosition);
 
-    /** Get all active chunks that should render */
+    /** Get all active chunks that should render (C++ only - returns shared pointers) */
+    TArray<TSharedPtr<FPlanetChunk>> GetActiveChunks() const;
+
+    /** Get number of active chunks (Blueprint accessible) */
     UFUNCTION(BlueprintCallable, Category = "Octree LOD")
-    TArray<FPlanetChunk*> GetActiveChunks() const;
+    int32 GetActiveChunkCount() const;
+
+    /** Get active chunk positions (Blueprint accessible) */
+    UFUNCTION(BlueprintCallable, Category = "Octree LOD")
+    TArray<FVector> GetActiveChunkPositions() const;
 
     /** Initialize the octree */
     UFUNCTION(BlueprintCallable, Category = "Octree LOD")
