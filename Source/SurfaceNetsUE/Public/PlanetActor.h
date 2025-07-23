@@ -52,6 +52,10 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Planet")
     void InitializePlanet();
 
+    /** Debug: Log planet generation statistics */
+    UFUNCTION(BlueprintCallable, Category = "Debug")
+    void LogPlanetStats();
+
 private:
     /** Generated planet chunks */
     TArray<TUniquePtr<FPlanetChunk>> PlanetChunks;

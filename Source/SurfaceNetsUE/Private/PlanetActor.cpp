@@ -15,7 +15,7 @@ APlanetActor::APlanetActor()
     // Match Rust example parameters more closely
     PlanetRadius = 1000.0f;
     ChunkSize = 128.0f;  // Larger chunks like Rust (16 voxels * 8 = 128 units)
-    ChunksPerAxis = 10;  // Smaller grid, like Rust 10x10x10
+    ChunksPerAxis = 16;
     VoxelsPerChunk = 16; // Same as Rust
     bEnableCollision = false;
     
@@ -28,6 +28,13 @@ void APlanetActor::BeginPlay()
     Super::BeginPlay();
     
     UE_LOG(LogSurfaceNets, Log, TEXT("Planet spawned successfully at %s"), *GetActorLocation().ToString());
+    
+    // CRITICAL FIX: Ensure NoiseGenerator exists before using it
+    if (!NoiseGenerator)
+    {
+        UE_LOG(LogSurfaceNets, Error, TEXT("NoiseGenerator is null, creating new one"));
+        NoiseGenerator = NewObject<UNoiseGenerator>(this);
+    }
     
     // Initialize planet on begin play
     InitializePlanet();
@@ -130,6 +137,13 @@ void APlanetActor::GenerateAllChunks()
 
 bool APlanetActor::GenerateChunk(int32 X, int32 Y, int32 Z, const FVector& ChunkCenter)
 {
+    // CRITICAL FIX: Null check before passing NoiseGenerator
+    if (!NoiseGenerator)
+    {
+        UE_LOG(LogSurfaceNets, Error, TEXT("NoiseGenerator is null in GenerateChunk"));
+        return false;
+    }
+    
     // Create chunk with proper LOD level
     TUniquePtr<FPlanetChunk> NewChunk = MakeUnique<FPlanetChunk>(ChunkCenter, 0, ChunkSize);
     
@@ -184,4 +198,27 @@ bool APlanetActor::GenerateChunk(int32 X, int32 Y, int32 Z, const FVector& Chunk
     // Always store the chunk (even if it has no mesh) for consistency
     PlanetChunks.Add(MoveTemp(NewChunk));
     return bMeshGenerated;
+}
+
+void APlanetActor::LogPlanetStats()
+{
+    int32 TotalVertices = 0;
+    int32 TotalTriangles = 0;
+    
+    for (const auto& Chunk : PlanetChunks)
+    {
+        if (Chunk.IsValid())
+        {
+            TotalVertices += Chunk->Vertices.Num();
+            TotalTriangles += Chunk->Triangles.Num() / 3;
+        }
+    }
+    
+    UE_LOG(LogSurfaceNets, Warning, TEXT("Planet Stats:"));
+    UE_LOG(LogSurfaceNets, Warning, TEXT("  Generated Chunks: %d"), PlanetChunks.Num());
+    UE_LOG(LogSurfaceNets, Warning, TEXT("  Active Mesh Components: %d"), MeshComponents.Num());
+    UE_LOG(LogSurfaceNets, Warning, TEXT("  Total Vertices: %d"), TotalVertices);
+    UE_LOG(LogSurfaceNets, Warning, TEXT("  Total Triangles: %d"), TotalTriangles);
+    UE_LOG(LogSurfaceNets, Warning, TEXT("  Planet Radius: %f"), PlanetRadius);
+    UE_LOG(LogSurfaceNets, Warning, TEXT("  Chunk Size: %f"), ChunkSize);
 }

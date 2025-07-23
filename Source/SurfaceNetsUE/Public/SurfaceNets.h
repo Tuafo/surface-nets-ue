@@ -58,7 +58,8 @@ private:
         const FIntVector& P2,
         const FIntVector& AxisB,
         const FIntVector& AxisC,
-        TArray<int32>& OutTriangles
+        TArray<int32>& OutTriangles,
+        const TArray<FVector>& Vertices
     );
     
     /** Calculate vertex position using Surface Nets smoothing (equivalent to estimate_surface in Rust) */
@@ -69,6 +70,12 @@ private:
         float VoxelSize,
         const FVector& Origin
     );
+    
+    /** Calculate centroid of edge intersections for vertex positioning */
+    FVector CalculateCentroidOfEdgeIntersections(const float CornerDists[8]);
+    
+    /** Estimate surface edge intersection point */
+    FVector EstimateSurfaceEdgeIntersection(int32 Corner1, int32 Corner2, float Value1, float Value2);
     
     /** Calculate gradient at a point for normal calculation */
     FVector CalculateGradient(

@@ -46,6 +46,7 @@ bool FPlanetChunk::GenerateMesh(const UNoiseGenerator* NoiseGenerator)
         bIsGenerating = false;
         bIsEmpty = true;
         bIsGenerated = true;
+        UE_LOG(LogSurfaceNets, Warning, TEXT("Failed to generate density field for chunk at %s"), *Position.ToString());
         return false;
     }
 
@@ -55,6 +56,7 @@ bool FPlanetChunk::GenerateMesh(const UNoiseGenerator* NoiseGenerator)
         bIsGenerating = false;
         bIsEmpty = true;
         bIsGenerated = true;
+        UE_LOG(LogSurfaceNets, Verbose, TEXT("Chunk at %s has no surface"), *Position.ToString());
         return false;
     }
 
