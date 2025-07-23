@@ -4,8 +4,7 @@
 
 /**
  * Surface Nets mesh generation algorithm implementation
- * Generates smooth meshes from voxel density fields using the fast surface nets approach
- * Equivalent to the Rust fast-surface-nets-rs implementation
+ * Based on the Rust fast-surface-nets-rs library with chunk-friendly approach
  */
 struct SURFACENETSUE_API FSurfaceNets
 {
@@ -22,6 +21,9 @@ public:
         const FIntVector& MinBounds = FIntVector(0, 0, 0),
         const FIntVector& MaxBounds = FIntVector(0, 0, 0)
     );
+
+    /** Check if chunk contains surface (optimization like Rust early exit) */
+    static bool HasSurfaceInChunk(const TArray<float>& DensityField);
 
 private:
     /** Phase 1: Estimate surface (equivalent to estimate_surface in Rust) */

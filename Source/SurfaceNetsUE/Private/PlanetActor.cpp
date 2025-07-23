@@ -133,9 +133,6 @@ bool APlanetActor::GenerateChunk(int32 X, int32 Y, int32 Z, const FVector& Chunk
     // Create chunk with proper LOD level
     TUniquePtr<FPlanetChunk> NewChunk = MakeUnique<FPlanetChunk>(ChunkCenter, 0, ChunkSize);
     
-    // Set the base voxel resolution
-    NewChunk->VoxelResolution = VoxelsPerChunk;
-    
     // Generate mesh using the chunk's GenerateMesh method (equivalent to Rust generate_and_process_chunk)
     bool bMeshGenerated = NewChunk->GenerateMesh(NoiseGenerator);
     

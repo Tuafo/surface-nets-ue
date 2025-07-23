@@ -6,6 +6,7 @@ class UNoiseGenerator;
 
 /**
  * Represents a chunk of planet terrain, equivalent to Rust chunk implementation
+ * 16³ unpadded, 18³ with boundary padding for seamless stitching
  */
 struct SURFACENETSUE_API FPlanetChunk
 {
@@ -22,9 +23,6 @@ public:
     /** Size of the chunk in world units */
     float Size;
     
-    /** Base voxel resolution (unpadded) */
-    int32 VoxelResolution;
-    
     /** Generated mesh data */
     TArray<FVector> Vertices;
     TArray<int32> Triangles;
@@ -34,9 +32,14 @@ public:
     /** Generation state */
     bool bIsGenerated;
     bool bIsGenerating;
+    bool bIsEmpty;
     
     /** Distance from camera for LOD calculations */
     float DistanceFromCamera;
+
+    // Chunk dimensions (matching Rust implementation)
+    static const int32 UNPADDED_CHUNK_SIZE = 16;
+    static const int32 PADDED_CHUNK_SIZE = 18;
 
     /** Generate mesh for this chunk (equivalent to Rust chunk processing) */
     bool GenerateMesh(const UNoiseGenerator* NoiseGenerator);

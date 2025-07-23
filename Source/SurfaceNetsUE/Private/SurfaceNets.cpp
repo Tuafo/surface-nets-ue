@@ -27,6 +27,7 @@ void FSurfaceNets::GenerateMesh(
     const FIntVector& MinBounds,
     const FIntVector& MaxBounds)
 {
+    // Clear output arrays
     OutVertices.Empty();
     OutTriangles.Empty();
     OutNormals.Empty();
@@ -44,6 +45,12 @@ void FSurfaceNets::GenerateMesh(
         ? FIntVector(GridSize - 1, GridSize - 1, GridSize - 1) 
         : MaxBounds;
     
+    // Early exit if no surface found (like Rust optimization)
+    if (!HasSurfaceInChunk(DensityField))
+    {
+        return;
+    }
+    
     // Vertex grid for tracking surface vertices (equivalent to stride_to_index in Rust)
     TArray<int32> VertexGrid;
     VertexGrid.Init(-1, GridSize * GridSize * GridSize);
@@ -52,8 +59,34 @@ void FSurfaceNets::GenerateMesh(
     EstimateSurface(DensityField, GridSize, ActualMinBounds, ActualMaxBounds, 
                    VertexGrid, OutVertices, OutNormals, VoxelSize, Origin);
     
-    // Phase 2: Make all quads
+    // Phase 2: Make all quads (with seamless boundary handling like Rust)
     MakeAllQuads(DensityField, GridSize, ActualMinBounds, ActualMaxBounds, VertexGrid, OutTriangles);
+}
+
+bool FSurfaceNets::HasSurfaceInChunk(const TArray<float>& DensityField)
+{
+    bool HasPositive = false;
+    bool HasNegativeOrZero = false;
+    
+    for (float Value : DensityField)
+    {
+        if (Value > 0.0f)
+        {
+            HasPositive = true;
+        }
+        else
+        {
+            HasNegativeOrZero = true;
+        }
+        
+        // Early exit if we found both (surface exists)
+        if (HasPositive && HasNegativeOrZero)
+        {
+            return true;
+        }
+    }
+    
+    return false;
 }
 
 void FSurfaceNets::EstimateSurface(
@@ -67,22 +100,25 @@ void FSurfaceNets::EstimateSurface(
     float VoxelSize,
     const FVector& Origin)
 {
-    for (int32 z = MinBounds.Z; z < MaxBounds.Z; z++)
+    for (int32 x = MinBounds.X; x < MaxBounds.X; x++)
     {
         for (int32 y = MinBounds.Y; y < MaxBounds.Y; y++)
         {
-            for (int32 x = MinBounds.X; x < MaxBounds.X; x++)
+            for (int32 z = MinBounds.Z; z < MaxBounds.Z; z++)
             {
                 if (ContainsSurface(DensityField, GridSize, x, y, z))
                 {
+                    // Calculate vertex position using Surface Nets method
                     FVector VertexPos = CalculateVertexPosition(DensityField, GridSize, x, y, z, VoxelSize, Origin);
+                    
+                    // Calculate normal using gradient
                     FVector Normal = CalculateGradient(DensityField, GridSize, x, y, z);
                     
                     int32 VertexIndex = OutVertices.Num();
                     OutVertices.Add(VertexPos);
-                    OutNormals.Add(Normal.GetSafeNormal());
+                    OutNormals.Add(Normal);
                     
-                    // Store in grid for quick lookup
+                    // Store vertex index in grid
                     int32 GridIndex = x + y * GridSize + z * GridSize * GridSize;
                     VertexGrid[GridIndex] = VertexIndex;
                 }
@@ -99,58 +135,41 @@ void FSurfaceNets::MakeAllQuads(
     const TArray<int32>& VertexGrid,
     TArray<int32>& OutTriangles)
 {
-    // Equivalent to Rust implementation axis ordering
-    FIntVector XYZStrides[3] = {
-        FIntVector(1, 0, 0), // X axis
-        FIntVector(0, 1, 0), // Y axis  
-        FIntVector(0, 0, 1)  // Z axis
-    };
-    
-    for (int32 z = MinBounds.Z; z < MaxBounds.Z; z++)
+    // Key change: Don't generate quads on positive boundaries (MaxBounds)
+    // This ensures seamless stitching between chunks like in Rust implementation
+    for (int32 x = MinBounds.X; x < MaxBounds.X; x++)
     {
         for (int32 y = MinBounds.Y; y < MaxBounds.Y; y++)
         {
-            for (int32 x = MinBounds.X; x < MaxBounds.X; x++)
+            for (int32 z = MinBounds.Z; z < MaxBounds.Z; z++)
             {
                 FIntVector CubePos(x, y, z);
                 
-                // Do edges parallel with the X axis
-                if (y > MinBounds.Y && z > MinBounds.Z && x < MaxBounds.X - 1)
+                // Only generate quads in negative directions to avoid duplicates
+                // This ensures seamless stitching between chunks
+                
+                // Check X-direction (negative)
+                if (x > MinBounds.X)
                 {
-                    MaybeCreateQuad(
-                        DensityField, GridSize, VertexGrid,
-                        CubePos,
-                        CubePos + XYZStrides[0],
-                        XYZStrides[1],
-                        XYZStrides[2],
-                        OutTriangles
-                    );
+                    MaybeCreateQuad(DensityField, GridSize, VertexGrid, 
+                                   CubePos, CubePos + FIntVector(-1, 0, 0),
+                                   FIntVector(0, 1, 0), FIntVector(0, 0, 1), OutTriangles);
                 }
                 
-                // Do edges parallel with the Y axis
-                if (x > MinBounds.X && z > MinBounds.Z && y < MaxBounds.Y - 1)
+                // Check Y-direction (negative)  
+                if (y > MinBounds.Y)
                 {
-                    MaybeCreateQuad(
-                        DensityField, GridSize, VertexGrid,
-                        CubePos,
-                        CubePos + XYZStrides[1],
-                        XYZStrides[2],
-                        XYZStrides[0],
-                        OutTriangles
-                    );
+                    MaybeCreateQuad(DensityField, GridSize, VertexGrid,
+                                   CubePos, CubePos + FIntVector(0, -1, 0),
+                                   FIntVector(0, 0, 1), FIntVector(1, 0, 0), OutTriangles);
                 }
                 
-                // Do edges parallel with the Z axis
-                if (x > MinBounds.X && y > MinBounds.Y && z < MaxBounds.Z - 1)
+                // Check Z-direction (negative)
+                if (z > MinBounds.Z)
                 {
-                    MaybeCreateQuad(
-                        DensityField, GridSize, VertexGrid,
-                        CubePos,
-                        CubePos + XYZStrides[2],
-                        XYZStrides[0],
-                        XYZStrides[1],
-                        OutTriangles
-                    );
+                    MaybeCreateQuad(DensityField, GridSize, VertexGrid,
+                                   CubePos, CubePos + FIntVector(0, 0, -1),
+                                   FIntVector(1, 0, 0), FIntVector(0, 1, 0), OutTriangles);
                 }
             }
         }
@@ -167,26 +186,26 @@ void FSurfaceNets::MaybeCreateQuad(
     const FIntVector& AxisC,
     TArray<int32>& OutTriangles)
 {
-    // Get the four vertices of the quad
+    // Get vertex indices for the four corners of the potential quad
     int32 V1 = GetVertexIndex(VertexGrid, GridSize, P1.X, P1.Y, P1.Z);
     int32 V2 = GetVertexIndex(VertexGrid, GridSize, P2.X, P2.Y, P2.Z);
-    int32 V3 = GetVertexIndex(VertexGrid, GridSize, P1.X - AxisC.X, P1.Y - AxisC.Y, P1.Z - AxisC.Z);
-    int32 V4 = GetVertexIndex(VertexGrid, GridSize, P1.X - AxisB.X - AxisC.X, P1.Y - AxisB.Y - AxisC.Y, P1.Z - AxisB.Z - AxisC.Z);
+    int32 V3 = GetVertexIndex(VertexGrid, GridSize, P1.X + AxisB.X, P1.Y + AxisB.Y, P1.Z + AxisB.Z);
+    int32 V4 = GetVertexIndex(VertexGrid, GridSize, P2.X + AxisB.X, P2.Y + AxisB.Y, P2.Z + AxisB.Z);
     
-    // Validate all vertices exist
-    if (V1 == -1 || V2 == -1 || V3 == -1 || V4 == -1)
+    // Check if all vertices exist
+    if (V1 >= 0 && V2 >= 0 && V3 >= 0 && V4 >= 0)
     {
-        return;
+        // Create two triangles from the quad
+        // Triangle 1: V1, V2, V3
+        OutTriangles.Add(V1);
+        OutTriangles.Add(V2);
+        OutTriangles.Add(V3);
+        
+        // Triangle 2: V2, V4, V3
+        OutTriangles.Add(V2);
+        OutTriangles.Add(V4);
+        OutTriangles.Add(V3);
     }
-    
-    // Create two triangles from the quad (matching Rust winding order)
-    OutTriangles.Add(V1);
-    OutTriangles.Add(V2);
-    OutTriangles.Add(V3);
-    
-    OutTriangles.Add(V2);
-    OutTriangles.Add(V4);
-    OutTriangles.Add(V3);
 }
 
 FVector FSurfaceNets::CalculateVertexPosition(
@@ -231,16 +250,21 @@ FVector FSurfaceNets::CalculateVertexPosition(
     
     if (EdgeCount > 0)
     {
-        Centroid /= EdgeCount;
+        Centroid /= static_cast<float>(EdgeCount);
     }
     else
     {
-        // Fallback to cube center if no edges found
+        // Fallback to cube center
         Centroid = FVector(0.5f, 0.5f, 0.5f);
     }
     
     // Convert to world coordinates
-    FVector WorldPos = Origin + FVector(x, y, z) * VoxelSize + Centroid * VoxelSize;
+    FVector WorldPos = Origin + FVector(
+        (x + Centroid.X) * VoxelSize,
+        (y + Centroid.Y) * VoxelSize,
+        (z + Centroid.Z) * VoxelSize
+    );
+    
     return WorldPos;
 }
 
@@ -249,44 +273,55 @@ FVector FSurfaceNets::CalculateGradient(
     int32 GridSize,
     int32 x, int32 y, int32 z)
 {
-    // Central difference for gradient calculation
-    float DeltaX = GetDensity(DensityField, GridSize, x + 1, y, z) - GetDensity(DensityField, GridSize, x - 1, y, z);
-    float DeltaY = GetDensity(DensityField, GridSize, x, y + 1, z) - GetDensity(DensityField, GridSize, x, y - 1, z);
-    float DeltaZ = GetDensity(DensityField, GridSize, x, y, z + 1) - GetDensity(DensityField, GridSize, x, y, z - 1);
+    FVector Gradient;
     
-    return FVector(DeltaX, DeltaY, DeltaZ);
-}
-
-bool FSurfaceNets::ContainsSurface(const TArray<float>& DensityField, int32 GridSize, int32 x, int32 y, int32 z)
-{
-    // Check if any corner has different sign than others
-    float FirstValue = GetDensity(DensityField, GridSize, x, y, z);
-    bool FirstSign = FirstValue > 0.0f;
+    // Central differencing for gradient calculation
+    Gradient.X = GetDensity(DensityField, GridSize, x + 1, y, z) - GetDensity(DensityField, GridSize, x - 1, y, z);
+    Gradient.Y = GetDensity(DensityField, GridSize, x, y + 1, z) - GetDensity(DensityField, GridSize, x, y - 1, z);
+    Gradient.Z = GetDensity(DensityField, GridSize, x, y, z + 1) - GetDensity(DensityField, GridSize, x, y, z - 1);
     
-    for (int32 i = 1; i < 8; i++)
-    {
-        FIntVector Corner = FIntVector(x, y, z) + CubeCorners[i];
-        float Value = GetDensity(DensityField, GridSize, Corner.X, Corner.Y, Corner.Z);
-        bool Sign = Value > 0.0f;
-        
-        if (Sign != FirstSign)
-        {
-            return true; // Surface crossing found
-        }
-    }
-    
-    return false;
+    return -Gradient.GetSafeNormal(); // Negative for correct normal direction
 }
 
 float FSurfaceNets::GetDensity(const TArray<float>& DensityField, int32 GridSize, int32 x, int32 y, int32 z)
 {
+    // Bounds checking
     if (x < 0 || x >= GridSize || y < 0 || y >= GridSize || z < 0 || z >= GridSize)
     {
-        return 1.0f; // Outside bounds is considered positive (exterior)
+        return 1.0f; // Outside boundary is considered "air"
     }
     
     int32 Index = x + y * GridSize + z * GridSize * GridSize;
     return DensityField[Index];
+}
+
+bool FSurfaceNets::ContainsSurface(const TArray<float>& DensityField, int32 GridSize, int32 x, int32 y, int32 z)
+{
+    bool HasPositive = false;
+    bool HasNegative = false;
+    
+    for (int32 i = 0; i < 8; i++)
+    {
+        FIntVector Corner = FIntVector(x, y, z) + CubeCorners[i];
+        float Density = GetDensity(DensityField, GridSize, Corner.X, Corner.Y, Corner.Z);
+        
+        if (Density > 0.0f)
+        {
+            HasPositive = true;
+        }
+        else
+        {
+            HasNegative = true;
+        }
+        
+        // Early exit if both found
+        if (HasPositive && HasNegative)
+        {
+            return true;
+        }
+    }
+    
+    return false;
 }
 
 int32 FSurfaceNets::GetVertexIndex(const TArray<int32>& VertexGrid, int32 GridSize, int32 x, int32 y, int32 z)
