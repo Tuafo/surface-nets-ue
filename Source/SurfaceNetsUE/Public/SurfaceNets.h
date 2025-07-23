@@ -5,11 +5,12 @@
 /**
  * Surface Nets mesh generation algorithm implementation
  * Generates smooth meshes from voxel density fields using the fast surface nets approach
+ * Equivalent to the Rust fast-surface-nets-rs implementation
  */
 struct SURFACENETSUE_API FSurfaceNets
 {
 public:
-    /** Generate mesh from density field using Surface Nets algorithm */
+    /** Generate mesh from density field using Surface Nets algorithm with bounds (like Rust version) */
     void GenerateMesh(
         const TArray<float>& DensityField,
         int32 GridSize,
@@ -17,15 +18,31 @@ public:
         const FVector& Origin,
         TArray<FVector>& OutVertices,
         TArray<int32>& OutTriangles,
-        TArray<FVector>& OutNormals
+        TArray<FVector>& OutNormals,
+        const FIntVector& MinBounds = FIntVector(0, 0, 0),
+        const FIntVector& MaxBounds = FIntVector(0, 0, 0)
     );
 
 private:
+    /** Phase 1: Estimate surface (equivalent to estimate_surface in Rust) */
+    void EstimateSurface(
+        const TArray<float>& DensityField,
+        int32 GridSize,
+        const FIntVector& MinBounds,
+        const FIntVector& MaxBounds,
+        TArray<int32>& VertexGrid,
+        TArray<FVector>& OutVertices,
+        TArray<FVector>& OutNormals,
+        float VoxelSize,
+        const FVector& Origin
+    );
+    
     /** Phase 2: Create all quads from surface vertices (equivalent to make_all_quads in Rust) */
     void MakeAllQuads(
         const TArray<float>& DensityField,
         int32 GridSize,
-        const TMap<FIntVector, int32>& VertexMap,
+        const FIntVector& MinBounds,
+        const FIntVector& MaxBounds,
         const TArray<int32>& VertexGrid,
         TArray<int32>& OutTriangles
     );
@@ -39,8 +56,7 @@ private:
         const FIntVector& P2,
         const FIntVector& AxisB,
         const FIntVector& AxisC,
-        TArray<int32>& OutTriangles,
-        const TArray<FVector>& Vertices
+        TArray<int32>& OutTriangles
     );
     
     /** Calculate vertex position using Surface Nets smoothing (equivalent to estimate_surface in Rust) */
@@ -67,12 +83,6 @@ private:
     
     /** Get vertex index from vertex grid */
     int32 GetVertexIndex(const TArray<int32>& VertexGrid, int32 GridSize, int32 x, int32 y, int32 z);
-    
-    /** Calculate centroid of edge intersections for vertex positioning */
-    FVector CalculateCentroidOfEdgeIntersections(const float CornerDists[8]);
-    
-    /** Estimate surface edge intersection point */
-    FVector EstimateSurfaceEdgeIntersection(int32 Corner1, int32 Corner2, float Value1, float Value2);
     
     /** Cube corner offsets */
     static const FIntVector CubeCorners[8];

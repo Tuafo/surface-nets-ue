@@ -3,15 +3,11 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "ProceduralMeshComponent.h"
+#include "PlanetChunk.h"  // Include the complete definition
 #include "PlanetActor.generated.h"
 
 class UNoiseGenerator;
-struct FPlanetChunk;
 
-/**
- * Main planet actor that manages procedural sphere generation using Surface Nets
- * Based on the fast-surface-nets-rs implementation for seamless chunk boundaries
- */
 UCLASS(BlueprintType, Blueprintable)
 class SURFACENETSUE_API APlanetActor : public AActor
 {
@@ -23,60 +19,53 @@ public:
 protected:
     virtual void BeginPlay() override;
 
-public:    
-    virtual void Tick(float DeltaTime) override;
-
-    /** Root scene component */
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
-    USceneComponent* RootSceneComponent;
-    
-    /** Noise generator for terrain */
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
-    UNoiseGenerator* NoiseGenerator;
-    
-    /** Procedural mesh components for chunks */
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
-    TArray<UProceduralMeshComponent*> MeshComponents;
-
-    /** Planet radius */
+public:
+    /** Planet radius in world units */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet")
     float PlanetRadius = 1000.0f;
     
-    /** Chunk size for dividing the sphere (recommended: 64.0f for good detail) */
+    /** Size of each chunk in world units */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet")
     float ChunkSize = 64.0f;
     
-    /** Number of chunks per axis (creates ChunksPerAxis^3 total grid, but only sphere-intersecting chunks are generated) */
+    /** Number of chunks per axis (creates ChunksPerAxis^3 total chunks) */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet")
     int32 ChunksPerAxis = 16;
     
-    /** Base voxel resolution per chunk (will be padded to VoxelsPerChunk+2 for seamless boundaries) */
+    /** Number of voxels per chunk (base resolution) */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet")
     int32 VoxelsPerChunk = 16;
     
-    /** Material to apply to planet chunks */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering")
-    UMaterialInterface* PlanetMaterial;
+    /** Enable collision for generated meshes */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet")
+    bool bEnableCollision = false;
     
-    /** Enable collision for planet chunks */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Physics")
-    bool bEnableCollision = true;
+    /** Material to apply to planet surface */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering")
+    UMaterialInterface* PlanetMaterial = nullptr;
+    
+    /** Noise generator for terrain */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Planet")
+    UNoiseGenerator* NoiseGenerator = nullptr;
 
-    /** Initialize the planet with current parameters */
+    /** Initialize or reinitialize the planet with current parameters */
     UFUNCTION(BlueprintCallable, Category = "Planet")
     void InitializePlanet();
-    
-    /** Generate all chunks for the sphere (only generates chunks that intersect sphere surface) */
-    UFUNCTION(BlueprintCallable, Category = "Planet")
-    void GenerateAllChunks();
 
 private:
-    /** Array of planet chunks */
+    /** Generated planet chunks */
     TArray<TUniquePtr<FPlanetChunk>> PlanetChunks;
     
-    /** Create a new mesh component at runtime */
+    /** Mesh components for rendering chunks */
+    UPROPERTY()
+    TArray<UProceduralMeshComponent*> MeshComponents;
+    
+    /** Create a new mesh component */
     UProceduralMeshComponent* CreateMeshComponent();
     
-    /** Generate chunk at specific grid position with given world center */
-    void GenerateChunk(int32 X, int32 Y, int32 Z, const FVector& ChunkCenter);
+    /** Generate all chunks for the planet */
+    void GenerateAllChunks();
+    
+    /** Generate a single chunk at the specified grid position */
+    bool GenerateChunk(int32 X, int32 Y, int32 Z, const FVector& ChunkCenter);
 };

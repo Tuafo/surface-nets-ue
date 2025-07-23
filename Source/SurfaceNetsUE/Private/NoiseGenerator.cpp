@@ -1,12 +1,15 @@
 #include "NoiseGenerator.h"
+#include "SurfaceNetsUE.h"
 #include "Engine/Engine.h"
 
 UNoiseGenerator::UNoiseGenerator()
 {
     PlanetRadius = 1000.0f;
-    NoiseScale = 0.01f;
-    NoiseAmplitude = 100.0f;
-    Octaves = 4;
+    PlanetCenter = FVector::ZeroVector;
+    // Better noise parameters for surface intersection
+    NoiseScale = 0.001f;    // Smaller scale = larger features
+    NoiseAmplitude = 50.0f; // Smaller amplitude relative to radius
+    Octaves = 3;            // Fewer octaves for simpler terrain
     Lacunarity = 2.0f;
     Persistence = 0.5f;
     Seed = 1337;
@@ -17,15 +20,26 @@ float UNoiseGenerator::SampleDensity(const FVector& WorldPosition) const
     // Calculate distance from planet center
     float DistanceFromCenter = (WorldPosition - PlanetCenter).Size();
     
-    // Base sphere (positive outside, negative inside for Surface Nets)
+    // Base sphere (negative inside, positive outside for Surface Nets)
     float SphereDensity = DistanceFromCenter - PlanetRadius;
     
     // Add terrain noise
     float TerrainNoise = FractalNoise(WorldPosition);
     float TerrainHeight = TerrainNoise * NoiseAmplitude;
     
-    // Combine sphere with terrain
-    return SphereDensity + TerrainHeight;
+    // Combine sphere with terrain - negative values are "inside" the surface
+    float FinalDensity = SphereDensity - TerrainHeight;
+    
+    // Debug sampling for some positions
+    static int32 SampleCount = 0;
+    if (SampleCount < 10)
+    {
+        UE_LOG(LogSurfaceNets, VeryVerbose, TEXT("Sample at %s: Distance=%f, Sphere=%f, Noise=%f, Final=%f"), 
+               *WorldPosition.ToString(), DistanceFromCenter, SphereDensity, TerrainHeight, FinalDensity);
+        SampleCount++;
+    }
+    
+    return FinalDensity;
 }
 
 float UNoiseGenerator::SampleHeight(const FVector& SurfacePosition) const
@@ -52,8 +66,6 @@ float UNoiseGenerator::FractalNoise(const FVector& Position) const
 float UNoiseGenerator::SimplexNoise(const FVector& Position) const
 {
     // Simple 3D noise implementation
-    // This is a simplified version - in production you'd want to use a proper noise library
-    
     FVector P = Position;
     P.X += Seed * 0.1f;
     P.Y += Seed * 0.2f;
@@ -88,19 +100,27 @@ float UNoiseGenerator::SimplexNoise(const FVector& Position) const
     float Ix10 = Lerp(N010, N110, Sx);
     float Ix11 = Lerp(N011, N111, Sx);
     
-    float Ixy0 = Lerp(Ix00, Ix10, Sy);
-    float Ixy1 = Lerp(Ix01, Ix11, Sy);
+    float Iy0 = Lerp(Ix00, Ix10, Sy);
+    float Iy1 = Lerp(Ix01, Ix11, Sy);
     
-    return Lerp(Ixy0, Ixy1, Sz);
+    return Lerp(Iy0, Iy1, Sz);
 }
 
 float UNoiseGenerator::Hash(float x, float y, float z) const
 {
-    // Simple hash function for noise
-    int32 n = (int32)(x * 374761393.0f + y * 668265263.0f + z * 1013904223.0f);
-    n = (n << 13) ^ n;
-    n = (n * (n * n * 15731 + 789221) + 1376312589) & 0x7fffffff;
-    return (float)n / 1073741824.0f - 1.0f;
+    // Simple hash function for noise generation
+    int32 ix = static_cast<int32>(x);
+    int32 iy = static_cast<int32>(y);
+    int32 iz = static_cast<int32>(z);
+    
+    uint32 hash = ix * 374761393U + iy * 668265263U + iz * 2147483647U;
+    hash ^= hash >> 16;
+    hash *= 0x7feb352dU;
+    hash ^= hash >> 15;
+    hash *= 0x846ca68bU;
+    hash ^= hash >> 16;
+    
+    return (hash / 4294967295.0f) * 2.0f - 1.0f;
 }
 
 float UNoiseGenerator::SmoothStep(float t) const

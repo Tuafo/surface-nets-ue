@@ -1,11 +1,12 @@
 #include "PlanetChunk.h"
 #include "NoiseGenerator.h"
 #include "SurfaceNets.h"
+#include "SurfaceNetsUE.h"
 
 FPlanetChunk::FPlanetChunk()
     : Position(FVector::ZeroVector)
     , LODLevel(0)
-    , Size(64.0f)
+    , Size(128.0f)  // Match the larger chunk size
     , VoxelResolution(16)
     , bIsGenerated(false)
     , bIsGenerating(false)
@@ -24,126 +25,144 @@ FPlanetChunk::FPlanetChunk(const FVector& InPosition, int32 InLODLevel, float In
 {
 }
 
-void FPlanetChunk::GenerateMesh(const UNoiseGenerator* NoiseGenerator)
+bool FPlanetChunk::GenerateMesh(const UNoiseGenerator* NoiseGenerator)
 {
     if (bIsGenerating || bIsGenerated || !NoiseGenerator)
     {
-        return;
+        return false;
     }
     
     bIsGenerating = true;
-    
-    // Clear previous data
     ClearMesh();
     
-    // Generate padded density field for seamless chunk boundaries
+    // Generate padded density field exactly like Rust implementation
     TArray<float> PaddedDensityField;
     int32 PaddedSize;
     FVector PaddedOrigin;
     float VoxelSize;
     
-    GeneratePaddedDensityField(NoiseGenerator, PaddedDensityField, PaddedSize, PaddedOrigin, VoxelSize);
+    bool bHasSurface = GeneratePaddedDensityField(NoiseGenerator, PaddedDensityField, PaddedSize, PaddedOrigin, VoxelSize);
     
-    // Generate mesh using Surface Nets on padded data
+    // Early exit if no surface intersection (like Rust version)
+    if (!bHasSurface)
+    {
+        UE_LOG(LogSurfaceNets, VeryVerbose, TEXT("Chunk at %s has no surface intersection - skipping"), *Position.ToString());
+        bIsGenerating = false;
+        return false;
+    }
+    
+    // Generate mesh using Surface Nets with exact Rust parameters
     FSurfaceNets SurfaceNets;
-    TArray<FVector> PaddedVertices;
-    TArray<int32> PaddedTriangles;
-    TArray<FVector> PaddedNormals;
+    
+    // Use same parameters as Rust: min=[0,0,0], max=[UNPADDED_SIZE+1, UNPADDED_SIZE+1, UNPADDED_SIZE+1]
+    FIntVector MinBounds(0, 0, 0);
+    FIntVector MaxBounds(VoxelResolution + 1, VoxelResolution + 1, VoxelResolution + 1);
     
     SurfaceNets.GenerateMesh(PaddedDensityField, PaddedSize, VoxelSize, PaddedOrigin, 
-                           PaddedVertices, PaddedTriangles, PaddedNormals);
-    
-    // Filter vertices and triangles to only include those within the actual chunk bounds
-    // (excluding padding area)
-    FVector ChunkMin = Position - FVector(Size * 0.5f);
-    FVector ChunkMax = Position + FVector(Size * 0.5f);
-    
-    TMap<int32, int32> VertexRemapping;
-    
-    // Filter vertices that are within chunk bounds
-    for (int32 i = 0; i < PaddedVertices.Num(); i++)
-    {
-        const FVector& Vertex = PaddedVertices[i];
-        
-        // Check if vertex is within chunk bounds (with small tolerance for boundary vertices)
-        if (Vertex.X >= ChunkMin.X - VoxelSize * 0.1f && Vertex.X <= ChunkMax.X + VoxelSize * 0.1f &&
-            Vertex.Y >= ChunkMin.Y - VoxelSize * 0.1f && Vertex.Y <= ChunkMax.Y + VoxelSize * 0.1f &&
-            Vertex.Z >= ChunkMin.Z - VoxelSize * 0.1f && Vertex.Z <= ChunkMax.Z + VoxelSize * 0.1f)
-        {
-            int32 NewIndex = Vertices.Num();
-            VertexRemapping.Add(i, NewIndex);
-            Vertices.Add(Vertex);
-            Normals.Add(PaddedNormals[i]);
-        }
-    }
-    
-    // Filter triangles that reference valid vertices
-    for (int32 i = 0; i < PaddedTriangles.Num(); i += 3)
-    {
-        int32 V1 = PaddedTriangles[i];
-        int32 V2 = PaddedTriangles[i + 1];
-        int32 V3 = PaddedTriangles[i + 2];
-        
-        int32* NewV1 = VertexRemapping.Find(V1);
-        int32* NewV2 = VertexRemapping.Find(V2);
-        int32* NewV3 = VertexRemapping.Find(V3);
-        
-        if (NewV1 && NewV2 && NewV3)
-        {
-            Triangles.Add(*NewV1);
-            Triangles.Add(*NewV2);
-            Triangles.Add(*NewV3);
-        }
-    }
+                           Vertices, Triangles, Normals, MinBounds, MaxBounds);
     
     // Generate UVs
     UVs.SetNum(Vertices.Num());
+    FVector ChunkMin = Position - FVector(Size * 0.5f);
     for (int32 i = 0; i < Vertices.Num(); i++)
     {
         FVector LocalPos = (Vertices[i] - ChunkMin) / Size;
         UVs[i] = FVector2D(LocalPos.X, LocalPos.Y);
     }
     
+    UE_LOG(LogSurfaceNets, Log, TEXT("Chunk at %s generated %d vertices, %d triangles"), 
+           *Position.ToString(), Vertices.Num(), Triangles.Num() / 3);
+    
     bIsGenerated = true;
     bIsGenerating = false;
+    return true;
 }
 
-void FPlanetChunk::GeneratePaddedDensityField(
+bool FPlanetChunk::GeneratePaddedDensityField(
     const UNoiseGenerator* NoiseGenerator,
     TArray<float>& OutDensityField,
     int32& OutPaddedSize,
     FVector& OutPaddedOrigin,
     float& OutVoxelSize)
 {
-    // Add 1-voxel padding on all sides (like Rust implementation)
-    int32 PaddedResolution = VoxelResolution + 2; // +2 for padding on both sides
-    OutPaddedSize = PaddedResolution;
-    
-    OutVoxelSize = Size / static_cast<float>(VoxelResolution);
-    
-    // Origin should be offset by one voxel to account for padding
-    OutPaddedOrigin = Position - FVector(Size * 0.5f) - FVector(OutVoxelSize);
-    
-    OutDensityField.SetNum(PaddedResolution * PaddedResolution * PaddedResolution);
-    
-    // Sample density field with padding
-    for (int32 z = 0; z < PaddedResolution; z++)
+    if (!NoiseGenerator)
     {
-        for (int32 y = 0; y < PaddedResolution; y++)
+        return false;
+    }
+    
+    // Exact same as Rust: 1 voxel padding
+    int32 Padding = 1;
+    OutPaddedSize = VoxelResolution + (2 * Padding);  // e.g., 16 + 2 = 18
+    OutVoxelSize = Size / float(VoxelResolution);
+    
+    // Calculate padded origin
+    FVector ChunkMin = Position - FVector(Size * 0.5f);
+    OutPaddedOrigin = ChunkMin - FVector(Padding * OutVoxelSize);
+    
+    // Generate density field
+    int32 TotalVoxels = OutPaddedSize * OutPaddedSize * OutPaddedSize;
+    OutDensityField.SetNum(TotalVoxels);
+    
+    bool bHasPositive = false;
+    bool bHasNegativeOrZero = false;
+    
+    // Sample a few debug values
+    int32 SampleCount = 0;
+    float MinDensity = FLT_MAX;
+    float MaxDensity = -FLT_MAX;
+    
+    for (int32 Z = 0; Z < OutPaddedSize; Z++)
+    {
+        for (int32 Y = 0; Y < OutPaddedSize; Y++)
         {
-            for (int32 x = 0; x < PaddedResolution; x++)
+            for (int32 X = 0; X < OutPaddedSize; X++)
             {
                 FVector WorldPos = OutPaddedOrigin + FVector(
-                    x * OutVoxelSize,
-                    y * OutVoxelSize,
-                    z * OutVoxelSize
+                    X * OutVoxelSize,
+                    Y * OutVoxelSize,
+                    Z * OutVoxelSize
                 );
                 
-                int32 Index = x + y * PaddedResolution + z * PaddedResolution * PaddedResolution;
-                OutDensityField[Index] = NoiseGenerator->SampleDensity(WorldPos);
+                int32 Index = X + Y * OutPaddedSize + Z * OutPaddedSize * OutPaddedSize;
+                float DensityValue = NoiseGenerator->SampleDensity(WorldPos);
+                OutDensityField[Index] = DensityValue;
+                
+                // Track min/max for debugging
+                MinDensity = FMath::Min(MinDensity, DensityValue);
+                MaxDensity = FMath::Max(MaxDensity, DensityValue);
+                
+                // Track positive and negative values (like Rust implementation)
+                if (DensityValue > 0.0f)
+                {
+                    bHasPositive = true;
+                }
+                else
+                {
+                    bHasNegativeOrZero = true;
+                }
+                
+                // Debug first few samples
+                if (SampleCount < 5)
+                {
+                    UE_LOG(LogSurfaceNets, VeryVerbose, TEXT("Sample %d at %s: density = %f"), 
+                           SampleCount, *WorldPos.ToString(), DensityValue);
+                    SampleCount++;
+                }
             }
         }
     }
+    
+    // Only return true if we have both positive and negative values (surface intersection)
+    bool bHasSurface = bHasPositive && bHasNegativeOrZero;
+    
+    UE_LOG(LogSurfaceNets, Verbose, TEXT("Chunk at %s: MinDensity=%f, MaxDensity=%f, Positive=%s, Negative=%s, HasSurface=%s"), 
+           *Position.ToString(), 
+           MinDensity, MaxDensity,
+           bHasPositive ? TEXT("Yes") : TEXT("No"),
+           bHasNegativeOrZero ? TEXT("Yes") : TEXT("No"),
+           bHasSurface ? TEXT("Yes") : TEXT("No"));
+    
+    return bHasSurface;
 }
 
 void FPlanetChunk::ClearMesh()
@@ -157,29 +176,7 @@ void FPlanetChunk::ClearMesh()
 
 int32 FPlanetChunk::GetVoxelResolution() const
 {
-    // Adjust voxel resolution based on LOD level
-    switch (LODLevel)
-    {
-        case 0: return 32;  // Highest detail
-        case 1: return 24;  // Good detail
-        case 2: return 16;  // Medium detail
-        case 3: return 12;  // Lower detail
-        case 4: return 8;   // Low detail
-        default: return 6;  // Lowest detail
-    }
-}
-
-int32 FPlanetChunk::GetPaddedVoxelResolution() const
-{
-    return GetVoxelResolution() + 2 * CHUNK_PADDING + 1;
-}
-
-bool FPlanetChunk::ShouldSubdivide(float CameraDistance, float SubdivisionDistance) const
-{
-    return CameraDistance < SubdivisionDistance && LODLevel < 5;
-}
-
-bool FPlanetChunk::ShouldMerge(float CameraDistance, float MergeDistance) const
-{
-    return CameraDistance > MergeDistance * 1.5f; // Hysteresis to prevent flickering
+    // Adjust resolution based on LOD level
+    int32 BaseResolution = 16;
+    return FMath::Max(4, BaseResolution >> LODLevel);
 }

@@ -1,44 +1,44 @@
 #include "PlanetActor.h"
 #include "NoiseGenerator.h"
 #include "PlanetChunk.h"
-#include "SurfaceNets.h"
-#include "Engine/Engine.h"
+#include "SurfaceNetsUE.h"
 #include "Components/StaticMeshComponent.h"
-#include "Materials/MaterialInterface.h"
-
-DEFINE_LOG_CATEGORY_STATIC(LogSurfaceNets, Log, All);
+#include "Engine/Engine.h"
 
 APlanetActor::APlanetActor()
 {
-    PrimaryActorTick.bCanEverTick = true;
+    PrimaryActorTick.bCanEverTick = false;
     
     // Create root component
-    RootSceneComponent = CreateDefaultSubobject<USceneComponent>(TEXT("RootSceneComponent"));
-    RootComponent = RootSceneComponent;
+    RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("RootComponent"));
+    
+    // Match Rust example parameters more closely
+    PlanetRadius = 1000.0f;
+    ChunkSize = 128.0f;  // Larger chunks like Rust (16 voxels * 8 = 128 units)
+    ChunksPerAxis = 10;  // Smaller grid, like Rust 10x10x10
+    VoxelsPerChunk = 16; // Same as Rust
+    bEnableCollision = false;
     
     // Create noise generator
     NoiseGenerator = CreateDefaultSubobject<UNoiseGenerator>(TEXT("NoiseGenerator"));
-    
-    // Initialize parameters - adjusted for proper sphere generation
-    PlanetRadius = 1000.0f;
-    ChunkSize = 64.0f;  // Smaller chunks for better detail
-    ChunksPerAxis = 16; // More chunks to cover sphere properly
-    VoxelsPerChunk = 16; // Base resolution, will be 18x18x18 with padding
-    bEnableCollision = true;
-    PlanetMaterial = nullptr;
 }
 
 void APlanetActor::BeginPlay()
 {
     Super::BeginPlay();
     
-    // Initialize the planet
+    UE_LOG(LogSurfaceNets, Log, TEXT("Planet spawned successfully at %s"), *GetActorLocation().ToString());
+    
+    // Initialize planet on begin play
     InitializePlanet();
 }
 
-void APlanetActor::Tick(float DeltaTime)
+UProceduralMeshComponent* APlanetActor::CreateMeshComponent()
 {
-    Super::Tick(DeltaTime);
+    UProceduralMeshComponent* MeshComponent = NewObject<UProceduralMeshComponent>(this);
+    MeshComponent->AttachToComponent(RootComponent, FAttachmentTransformRules::KeepWorldTransform);
+    MeshComponent->RegisterComponent();
+    return MeshComponent;
 }
 
 void APlanetActor::InitializePlanet()
@@ -76,35 +76,48 @@ void APlanetActor::GenerateAllChunks()
     }
     MeshComponents.Empty();
     
-    // Calculate chunk bounds to cover sphere properly
-    float TotalSize = ChunksPerAxis * ChunkSize;
-    float HalfSize = TotalSize * 0.5f;
-    FVector StartPosition = GetActorLocation() - FVector(HalfSize, HalfSize, HalfSize);
+    // Calculate chunk bounds exactly like Rust implementation
+    // Rust uses: chunks_extent = Extent3i::from_min_and_lub(IVec3::from([-5; 3]), IVec3::from([5; 3]))
+    // Which creates a 10x10x10 grid centered around origin
+    float HalfExtent = (ChunksPerAxis / 2) * ChunkSize;
+    FVector PlanetCenter = GetActorLocation();
+    FVector StartPosition = PlanetCenter - FVector(HalfExtent, HalfExtent, HalfExtent);
     
-    // Generate chunks in a grid pattern
+    UE_LOG(LogSurfaceNets, Log, TEXT("Generating chunks from %s to %s (ChunkSize: %f)"), 
+           *StartPosition.ToString(), 
+           *(StartPosition + FVector(ChunksPerAxis * ChunkSize)).ToString(),
+           ChunkSize);
+    
+    // Generate chunks in a grid pattern (equivalent to Rust chunks_extent.iter3())
     int32 GeneratedChunks = 0;
+    int32 ProcessedChunks = 0;
+    
     for (int32 X = 0; X < ChunksPerAxis; X++)
     {
         for (int32 Y = 0; Y < ChunksPerAxis; Y++)
         {
             for (int32 Z = 0; Z < ChunksPerAxis; Z++)
             {
-                // Calculate chunk center
+                ProcessedChunks++;
+                
+                // Calculate chunk center (equivalent to Rust chunk_min calculation)
                 FVector ChunkCenter = StartPosition + FVector(
                     (X * ChunkSize) + (ChunkSize * 0.5f),
                     (Y * ChunkSize) + (ChunkSize * 0.5f),
                     (Z * ChunkSize) + (ChunkSize * 0.5f)
                 );
                 
-                // Only generate chunks that might intersect the sphere
-                float DistanceToSphere = FVector::Dist(ChunkCenter, GetActorLocation());
-                float ChunkRadius = ChunkSize * 1.732f; // sqrt(3) for diagonal
-                
-                // Generate chunk if it might contain part of the sphere surface
-                if (DistanceToSphere < PlanetRadius + ChunkRadius && 
-                    DistanceToSphere > PlanetRadius - ChunkRadius)
+                // Debug: Check distance from planet center for a few chunks
+                float DistanceFromCenter = (ChunkCenter - PlanetCenter).Size();
+                if (ProcessedChunks <= 10 || (ProcessedChunks % 100 == 0))
                 {
-                    GenerateChunk(X, Y, Z, ChunkCenter);
+                    UE_LOG(LogSurfaceNets, Log, TEXT("Chunk (%d,%d,%d) at %s, distance from center: %f (radius: %f)"), 
+                           X, Y, Z, *ChunkCenter.ToString(), DistanceFromCenter, PlanetRadius);
+                }
+                
+                // Generate chunk - let the chunk itself determine if it has surface intersection
+                if (GenerateChunk(X, Y, Z, ChunkCenter))
+                {
                     GeneratedChunks++;
                 }
             }
@@ -112,38 +125,33 @@ void APlanetActor::GenerateAllChunks()
     }
     
     UE_LOG(LogSurfaceNets, Log, TEXT("Generated %d chunks for sphere (out of %d total grid positions)"), 
-           GeneratedChunks, ChunksPerAxis * ChunksPerAxis * ChunksPerAxis);
+           GeneratedChunks, ProcessedChunks);
 }
 
-void APlanetActor::GenerateChunk(int32 X, int32 Y, int32 Z, const FVector& ChunkCenter)
+bool APlanetActor::GenerateChunk(int32 X, int32 Y, int32 Z, const FVector& ChunkCenter)
 {
     // Create chunk with proper LOD level
     TUniquePtr<FPlanetChunk> NewChunk = MakeUnique<FPlanetChunk>(ChunkCenter, 0, ChunkSize);
     
-    // Set the base voxel resolution (will be padded internally)
+    // Set the base voxel resolution
     NewChunk->VoxelResolution = VoxelsPerChunk;
     
-    // Generate mesh using the existing FPlanetChunk::GenerateMesh method
-    // This should handle boundary padding internally
-    NewChunk->GenerateMesh(NoiseGenerator);
+    // Generate mesh using the chunk's GenerateMesh method (equivalent to Rust generate_and_process_chunk)
+    bool bMeshGenerated = NewChunk->GenerateMesh(NoiseGenerator);
     
-    // Only create mesh component if chunk has valid mesh data
-    if (NewChunk->bIsGenerated && NewChunk->Vertices.Num() > 0 && NewChunk->Triangles.Num() > 0)
+    // Only create mesh component if chunk has valid mesh data (like Rust early return)
+    if (bMeshGenerated && NewChunk->Vertices.Num() > 0 && NewChunk->Triangles.Num() > 0)
     {
         // Create mesh component
         UProceduralMeshComponent* MeshComponent = CreateMeshComponent();
         
-        // Create mesh section using the chunk's existing mesh data
+        // Create mesh section using the chunk's mesh data
         TArray<FColor> VertexColors;
         TArray<FProcMeshTangent> Tangents;
         
-        // Apply the chunk's world position offset to vertices
-        TArray<FVector> WorldVertices = NewChunk->Vertices;
-        // Vertices should already be in world coordinates from the chunk generation
-        
         MeshComponent->CreateMeshSection(
             0,
-            WorldVertices,
+            NewChunk->Vertices,
             NewChunk->Triangles,
             NewChunk->Normals,
             NewChunk->UVs,
@@ -161,29 +169,22 @@ void APlanetActor::GenerateChunk(int32 X, int32 Y, int32 Z, const FVector& Chunk
         // Store mesh component reference
         MeshComponents.Add(MeshComponent);
         
-        UE_LOG(LogSurfaceNets, Verbose, TEXT("Generated chunk at (%d,%d,%d) with %d vertices, %d triangles"), 
-               X, Y, Z, WorldVertices.Num(), NewChunk->Triangles.Num() / 3);
+        UE_LOG(LogSurfaceNets, Log, TEXT("Generated chunk at (%d,%d,%d) with %d vertices, %d triangles"), 
+               X, Y, Z, NewChunk->Vertices.Num(), NewChunk->Triangles.Num() / 3);
     }
-    
-    PlanetChunks.Add(MoveTemp(NewChunk));
-}
-
-UProceduralMeshComponent* APlanetActor::CreateMeshComponent()
-{
-    // Create component at runtime using NewObject
-    UProceduralMeshComponent* MeshComponent = NewObject<UProceduralMeshComponent>(this);
-    
-    // Attach to root component
-    MeshComponent->SetupAttachment(RootComponent);
-    
-    // Set collision
-    MeshComponent->SetCollisionEnabled(bEnableCollision ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
-    
-    // Register the component with the world
-    if (GetWorld())
+    else
     {
-        MeshComponent->RegisterComponent();
+        // Debug logging for first few failed chunks
+        static int32 LoggedFailures = 0;
+        if (LoggedFailures < 5)
+        {
+            UE_LOG(LogSurfaceNets, Warning, TEXT("Chunk at (%d,%d,%d) center %s skipped - no surface intersection"), 
+                   X, Y, Z, *ChunkCenter.ToString());
+            LoggedFailures++;
+        }
     }
     
-    return MeshComponent;
+    // Always store the chunk (even if it has no mesh) for consistency
+    PlanetChunks.Add(MoveTemp(NewChunk));
+    return bMeshGenerated;
 }

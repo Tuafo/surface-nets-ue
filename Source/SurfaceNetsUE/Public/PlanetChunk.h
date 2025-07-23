@@ -1,39 +1,29 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "ProceduralMeshComponent.h"
-#include "PlanetChunk.generated.h"
+
+class UNoiseGenerator;
 
 /**
- * Represents a single chunk of planet terrain
+ * Represents a chunk of planet terrain, equivalent to Rust chunk implementation
  */
-USTRUCT(BlueprintType)
 struct SURFACENETSUE_API FPlanetChunk
 {
-    GENERATED_BODY()
-
 public:
     FPlanetChunk();
     FPlanetChunk(const FVector& InPosition, int32 InLODLevel, float InSize);
-    
-    /** Position of this chunk in world space */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Chunk")
+
+    /** Chunk center position in world coordinates */
     FVector Position;
     
     /** LOD level (0 = highest detail) */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Chunk")
     int32 LODLevel;
     
-    /** Size of this chunk */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Chunk")
+    /** Size of the chunk in world units */
     float Size;
     
-    /** Voxel resolution for this chunk */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Chunk")
+    /** Base voxel resolution (unpadded) */
     int32 VoxelResolution;
-    
-    /** Padding size for seamless chunk boundaries */
-    static constexpr int32 CHUNK_PADDING = 1;
     
     /** Generated mesh data */
     TArray<FVector> Vertices;
@@ -41,37 +31,26 @@ public:
     TArray<FVector> Normals;
     TArray<FVector2D> UVs;
     
-    /** Whether this chunk has been generated */
+    /** Generation state */
     bool bIsGenerated;
-    
-    /** Whether this chunk is currently being generated */
     bool bIsGenerating;
     
     /** Distance from camera for LOD calculations */
     float DistanceFromCamera;
+
+    /** Generate mesh for this chunk (equivalent to Rust chunk processing) */
+    bool GenerateMesh(const UNoiseGenerator* NoiseGenerator);
     
-    /** Generate mesh data for this chunk with proper padding */
-    void GenerateMesh(const class UNoiseGenerator* NoiseGenerator);
-    
-    /** Clear mesh data to free memory */
+    /** Clear all mesh data */
     void ClearMesh();
     
     /** Get voxel resolution based on LOD level */
     int32 GetVoxelResolution() const;
-    
-    /** Get padded voxel resolution (includes padding on all sides) */
-    int32 GetPaddedVoxelResolution() const;
-    
-    /** Check if this chunk should be subdivided based on distance */
-    bool ShouldSubdivide(float CameraDistance, float SubdivisionDistance) const;
-    
-    /** Check if this chunk should be merged based on distance */
-    bool ShouldMerge(float CameraDistance, float MergeDistance) const;
 
 private:
-    /** Generate padded density field for seamless mesh generation */
-    void GeneratePaddedDensityField(
-        const class UNoiseGenerator* NoiseGenerator,
+    /** Generate padded density field exactly like Rust implementation */
+    bool GeneratePaddedDensityField(
+        const UNoiseGenerator* NoiseGenerator,
         TArray<float>& OutDensityField,
         int32& OutPaddedSize,
         FVector& OutPaddedOrigin,
